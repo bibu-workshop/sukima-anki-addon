@@ -1,10 +1,10 @@
-"""Exports the batch file the Swift package's tests read.
+"""Exports the batch file the apps' tests read.
 
 Builds a throwaway collection with 45 due review cards, runs the add-on's own
-export, and copies the batch file out. Run from addon/ after any change to the
-batch format:
+export, and copies the batch file out. Run after any change to the batch
+format, naming the folder the apps' tests read (default: fixtures/):
 
-    .venv/bin/python tools/make_fixture_batch.py
+    .venv/bin/python tools/make_fixture_batch.py [target-folder]
 """
 
 import shutil
