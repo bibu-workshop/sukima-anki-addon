@@ -42,6 +42,8 @@ class ExportResult:
     skipped: dict[str, int] = field(default_factory=dict)
     empty_because: str | None = None
     due_count: int | None = None
+    # When Anki's day ends, as Anki counts days: after it, these cards are yesterday's.
+    next_day_at_ms: int | None = None
 
 
 def batch_record_path(state_dir: Path, batch_id: str) -> Path:
@@ -85,10 +87,11 @@ def _failed(exchange_dir: Path, state_dir: Path, now_ms: int, error: Exception) 
 def _export(
     col: Collection, deck_id: int | None, exchange_dir: Path, state_dir: Path, now_ms: int
 ) -> ExportResult:
+    day_end = _next_day_at_ms(col)
     deck = col.decks.get(deck_id, default=False) if deck_id else None
     if not deck:
         outcome = DECK_MISSING if deck_id else NO_DECK_CHOSEN
-        return _finish(exchange_dir, state_dir, now_ms, None, ExportResult(outcome), [])
+        return _finish(exchange_dir, state_dir, now_ms, None, ExportResult(outcome, next_day_at_ms=day_end), [])
 
     cards: list[dict] = []
     review_counts: dict[str, int] = {}
@@ -129,7 +132,9 @@ def _export(
     empty_because = None
     if not cards:
         empty_because = NONE_WATCH_READY if skipped else NOTHING_DUE
-    result = ExportResult(OK, batch_id, len(cards), skipped, empty_because, _due_count(col, deck_id))
+    result = ExportResult(
+        OK, batch_id, len(cards), skipped, empty_because, _due_count(col, deck_id), next_day_at_ms=day_end
+    )
     return _finish(
         exchange_dir, state_dir, now_ms, deck["name"], result, [c["card_id"] for c in cards]
     )
@@ -166,6 +171,14 @@ def _review_queue(col: Collection, deck_id: int) -> list:
     ]
 
 
+def _next_day_at_ms(col: Collection) -> int | None:
+    """When Anki's day ends (its next day cutoff, after the rollover hour). Never raises."""
+    try:
+        return int(col.sched.day_cutoff) * 1000
+    except Exception:
+        return None
+
+
 def _finish(
     exchange_dir: Path,
     state_dir: Path,
@@ -185,6 +198,7 @@ def _finish(
             "skipped": result.skipped,
             "empty_because": result.empty_because,
             "due_count": result.due_count,
+            "next_day_at_ms": result.next_day_at_ms,
         },
     )
     log(

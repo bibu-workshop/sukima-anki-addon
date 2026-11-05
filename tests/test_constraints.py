@@ -57,6 +57,9 @@ COLLECTION_READS = {
     "_backend.get_scheduling_states",
     "get_card",
     "sync_status",
+    # Added 2026-11-05: when Anki's day ends, so the helper knows the watch's cards
+    # are yesterday's (owner's go-ahead for the daily refresh). Only reads.
+    "sched.day_cutoff",
     DB_READ,
 }
 COLLECTION_USES = COLLECTION_CHANGES | COLLECTION_READS

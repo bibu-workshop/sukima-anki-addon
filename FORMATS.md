@@ -109,6 +109,7 @@ When a profile opens with no watch deck chosen, the add-on writes the status at 
 | `skipped` | object | Count of cards skipped, per reason |
 | `empty_because` | text or null | When the batch has no cards: `nothing_due` (no review cards due, or today's review limit is used up) or `none_watch_ready` (every due card was skipped). Otherwise null. |
 | `due_count` | number or null | How many review cards are due in the chosen deck and its subdecks, today or earlier, leaving out suspended and buried cards. The daily review limit is ignored, so it can be more than Anki's deck list shows and more than the batch holds. Null when the outcome is not `ok`. Written from add-on version 0.2.0; a status file from an older add-on has no such field. |
+| `next_day_at_ms` | number or null | When Anki's day ends at the time of the export (its next day cutoff, after the rollover hour). Once it has passed, the cards on the watch are from an earlier day and the helper asks for a cycle, with or without answers waiting. Null if Anki could not say. Absent from earlier versions of the add-on. |
 
 `last_cycle`, written once when a desktop cycle ends. The helper knows its request is done when `request_id` is its own.
 

@@ -1,5 +1,6 @@
 import json
 import re
+import time
 
 from anki.buildinfo import version as anki_version
 
@@ -102,6 +103,7 @@ def test_status_file(col, deck, exchange, state):
         "skipped": {},
         "empty_because": None,
         "due_count": 1,
+        "next_day_at_ms": col.sched.day_cutoff * 1000,
     }
     assert status["last_cycle"] is None
 
@@ -250,3 +252,15 @@ def test_due_count_leaves_out_cards_being_relearned(col, deck, exchange, state):
     assert col.get_card(lapsed.id).queue in (1, 3)
 
     assert _due_count(col, deck.id) == 1
+
+
+def test_the_status_says_when_ankis_day_ends(col, deck, exchange, state):
+    """The helper refreshes the watch's cards once that time has passed (owner, 2026-11-05)."""
+    deck.review("front")
+    export_batch(col, deck.id, exchange, state)
+    written = json.loads((exchange / "status.json").read_text())
+    assert written["last_export"]["next_day_at_ms"] == col.sched.day_cutoff * 1000
+    assert written["last_export"]["next_day_at_ms"] > time.time() * 1000
+    export_batch(col, None, exchange, state)
+    written = json.loads((exchange / "status.json").read_text())
+    assert written["last_export"]["next_day_at_ms"] == col.sched.day_cutoff * 1000
