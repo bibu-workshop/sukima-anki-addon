@@ -94,6 +94,9 @@ Written by the add-on. Read by the helper.
 | `last_export` | object or null | The last export, below |
 | `last_replay` | object | Absent until the first replay. `at_ms`, and the counts `applied`, `dropped`, `held` of the last replay. |
 | `last_cycle` | object or null | The last desktop cycle that ended, below. Null until one has. |
+| `waiting_for` | text or null | While the add-on holds back a cycle request: `review_screen` (Anki's review screen is open), `window_open` (a dialog or window besides the main one; scheduled requests only), `in_use` (Anki used in the last minute; scheduled requests only). Null when it is not waiting. Cleared when a profile opens. Absent from earlier versions of the add-on. |
+
+When a profile opens with no watch deck chosen, the add-on writes the status at once, with `last_export.outcome` `no_deck_chosen` and no batch, so the helper can ask for a deck (design guide 1.15).
 
 `last_export`:
 

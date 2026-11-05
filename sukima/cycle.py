@@ -88,6 +88,15 @@ class Host(Protocol):
         """Have Anki's window show the collection as it now is: counts, and Undo."""
 
 
+def profile_opened(col: Collection, exchange_dir: Path, state_dir: Path) -> None:
+    """A profile has opened. Whatever the add-on was waiting for belongs to the last
+    session. With no watch deck chosen, the status says so at once, so the helper can
+    ask for one instead of reporting the add-on missing (design guide 1.15, A1)."""
+    update_status(exchange_dir, waiting_for=None)
+    if chosen_deck_id(col, state_dir) is None:
+        export_batch(col, None, exchange_dir, state_dir)
+
+
 def anki_is_newer_than_tested(version: tuple[int, int]) -> bool:
     return tuple(version[:2]) > MAX_TESTED_ANKI
 
@@ -116,14 +125,19 @@ class DesktopCycle:
         self.waiting_since = 0
         self.noted: str | None = None
         self.report: dict = {}
+        # What the status file says the add-on waits for (DEC-156), and what this poll found.
+        self.waiting_for: str | None = None
+        self._waiting_now: str | None = None
 
     # -- what moves the cycle on -------------------------------------------
 
     def poll(self, col: Collection) -> None:
+        self._waiting_now = None
         try:
             self._poll(col)
         except Exception as e:
             self._failed(e)
+        self._report_waiting()
 
     def sync_finished(self, col: Collection) -> None:
         if self.state in (_SYNCING_IN, _SYNCING_OUT):
@@ -206,8 +220,20 @@ class DesktopCycle:
     def _waited_too_long(self) -> bool:
         return self.host.now_ms() - self.waiting_since > SYNC_TIMEOUT_MS
 
+    def _report_waiting(self) -> None:
+        """Tells the helper what the add-on waits for, in the status file, when it changes:
+        `review_screen`, `window_open` or `in_use`; null when it is not waiting."""
+        if self._waiting_now != self.waiting_for:
+            try:
+                update_status(self.exchange_dir, waiting_for=self._waiting_now)
+                self.waiting_for = self._waiting_now
+            except OSError:
+                pass  # tried again at the next poll
+
     def _note_waiting(self, what: str, **fields) -> None:
         """Logs a wait once, and again only when what is waited for changes."""
+        reason = str(fields.get("reason", "review_screen"))
+        self._waiting_now = reason.split(":", 1)[0]
         noted = " ".join([what, *(f"{k}={v}" for k, v in fields.items())])
         if self.noted != noted:
             self._log(what, **fields)

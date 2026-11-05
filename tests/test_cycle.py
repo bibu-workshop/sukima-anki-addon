@@ -8,7 +8,7 @@ import pytest
 
 from conftest import Deck
 from test_replay import HOUR, event, history, write_events
-from sukima.cycle import DesktopCycle, anki_is_newer_than_tested, parse_anki_version
+from sukima.cycle import DesktopCycle, anki_is_newer_than_tested, parse_anki_version, profile_opened
 from sukima.export import export_batch
 from sukima.files import write_json
 from sukima.settings import choose_deck, chosen_deck_id, state_dir_for, watch_decks
@@ -318,6 +318,64 @@ def test_the_reason_to_wait_is_logged_again_only_when_it_changes(mac):
         "scheduled_cycle_waits_for_quiet reason=in_use",
         "scheduled_cycle_waits_for_quiet reason=window_open",
     ]
+
+
+def status(mac):
+    return read(mac.exchange / "status.json")
+
+
+@pytest.mark.parametrize("busy, reported", [
+    ("review_screen", "review_screen"), ("window_open:Browser", "window_open"), ("in_use", "in_use")])
+def test_the_status_says_what_a_waiting_cycle_waits_for_and_clears_it_after(mac, busy, reported):
+    mac.watch_answers(1)
+    mac.request(scheduled=True)
+    mac.anki.busy = busy
+    mac.cycle.poll(mac.col)
+    assert status(mac)["waiting_for"] == reported
+    mac.anki.busy = None
+    mac.run()
+    assert status(mac)["waiting_for"] is None
+
+
+def test_the_status_says_a_manual_cycle_waits_for_the_review_screen(mac):
+    mac.watch_answers(1)
+    mac.request()
+    mac.anki.reviewing = True
+    mac.cycle.poll(mac.col)
+    assert status(mac)["waiting_for"] == "review_screen"
+    mac.anki.reviewing = False
+    mac.run()
+    assert status(mac)["waiting_for"] is None
+
+
+def test_the_status_is_written_only_when_the_wait_changes(mac):
+    mac.watch_answers(1)
+    mac.request(scheduled=True)
+    mac.anki.busy = "in_use"
+    mac.cycle.poll(mac.col)
+    stamp = (mac.exchange / "status.json").stat().st_mtime_ns
+    (mac.exchange / "status.json").write_text((mac.exchange / "status.json").read_text())  # same content, new time
+    stamp = (mac.exchange / "status.json").stat().st_mtime_ns
+    for _ in range(3):
+        mac.cycle.poll(mac.col)
+    assert (mac.exchange / "status.json").stat().st_mtime_ns == stamp
+
+
+def test_a_profile_with_no_deck_chosen_says_so_when_it_opens(col, exchange, state):
+    """Design guide 1.15, A1: the helper can ask for a deck instead of reporting no add-on."""
+    profile_opened(col, exchange, state)
+    written = read(exchange / "status.json")
+    assert written["last_export"]["outcome"] == "no_deck_chosen"
+    assert written["waiting_for"] is None
+    assert not (exchange / "batch.json").exists()
+
+
+def test_a_profile_with_a_deck_chosen_exports_nothing_when_it_opens(mac):
+    before = status(mac)["last_export"]
+    write_json(mac.exchange / "status.json", {**status(mac), "waiting_for": "in_use"})
+    profile_opened(mac.col, mac.exchange, mac.state)
+    assert status(mac)["last_export"] == before
+    assert status(mac)["waiting_for"] is None
 
 
 @pytest.mark.parametrize("scheduled", [None, False])

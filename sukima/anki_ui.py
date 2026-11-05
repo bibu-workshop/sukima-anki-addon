@@ -17,7 +17,7 @@ from aqt.qt import QAction, QApplication, QEvent, QInputDialog, QObject, Qt, QTi
 from aqt.utils import tooltip
 
 from . import cycle as cycle_module
-from .cycle import DesktopCycle, parse_anki_version
+from .cycle import DesktopCycle, parse_anki_version, profile_opened
 from .export import export_batch
 from .log import log
 from .settings import EXCHANGE_DIR, choose_deck, chosen_deck_id, state_dir_for, watch_decks
@@ -207,6 +207,11 @@ class _AddOn:
         self.state_dir = state_dir_for(USER_FILES, mw.pm.name)
         self.cycle = DesktopCycle(self.host, EXCHANGE_DIR, self.state_dir)
         log(self.state_dir, "profile_opened")
+        if mw.col:
+            try:
+                profile_opened(mw.col, EXCHANGE_DIR, self.state_dir)
+            except Exception as e:
+                log(self.state_dir, "profile_opened_error", kind=type(e).__name__)
 
     def profile_closing(self) -> None:
         self.cycle = None
