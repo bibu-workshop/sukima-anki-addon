@@ -33,7 +33,9 @@ def anki_ui(monkeypatch):
 
     sync = module("aqt.sync", handle_sync_error=None, full_sync=None)
     module("aqt", sync=sync, gui_hooks=None, mw=None)
-    module("aqt.qt", QAction=None, QInputDialog=None, QTimer=None)
+    window_type = types.SimpleNamespace(Window="Window", Dialog="Dialog", ToolTip="ToolTip", Popup="Popup", SplashScreen="SplashScreen")
+    module("aqt.qt", QAction=None, QApplication=None, QEvent=None, QInputDialog=None, QObject=None,
+           Qt=types.SimpleNamespace(WindowType=window_type), QTimer=None)
     module("aqt.utils", tooltip=None)
     monkeypatch.delitem(sys.modules, "sukima.anki_ui", raising=False)
     import sukima.anki_ui as ui
@@ -214,3 +216,35 @@ def test_a_sync_status_that_cannot_be_read_counts_as_no_full_sync_wanted(mac, mo
         raise TimeoutError("no network")
     monkeypatch.setattr(mac.col, "sync_status", offline)
     assert not mac.host.full_sync_wanted()
+
+
+class Window:
+    def __init__(self, kind="Window", visible=True):
+        self.kind, self.visible = kind, visible
+    def isVisible(self): return self.visible
+    def windowType(self): return self.kind
+
+class AnkiQt(Window): pass
+class Browser(Window): pass
+class AddCards(Window): pass
+class Tooltip(Window): pass
+class QMessageBox(Window): pass
+
+
+def test_a_scheduled_cycle_waits_for_the_review_screen_any_window_and_a_quiet_minute(anki_ui):
+    """DEC-156, in the order the reasons are given."""
+    reason = lambda **k: anki_ui.busy_reason(**{"reviewing": False, "open_windows": [], "last_used_ms": 0, "now_ms": 60_000, **k})
+    assert reason() is None
+    assert reason(now_ms=59_999) == "in_use"
+    assert reason(open_windows=["Browser", "AddCards", "Browser"]) == "window_open:AddCards,Browser"
+    assert reason(reviewing=True, open_windows=["Browser"], now_ms=1) == "review_screen"
+
+
+def test_only_windows_besides_the_main_one_count(anki_ui):
+    main = AnkiQt()
+    passing = [main, Browser(visible=False), Tooltip("ToolTip"), Window("Popup"), Window("SplashScreen")]
+    assert anki_ui.open_windows(main, passing, None) == []
+    assert anki_ui.open_windows(main, passing + [Browser(), AddCards("Dialog")], None) == ["Browser", "AddCards"]
+    modal = QMessageBox("Dialog")
+    assert anki_ui.open_windows(main, [main, modal], modal) == ["QMessageBox"]
+    assert anki_ui.open_windows(main, [main], main) == []

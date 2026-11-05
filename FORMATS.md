@@ -112,6 +112,7 @@ Written by the add-on. Read by the helper.
 | Field | Type | Meaning |
 |---|---|---|
 | `request_id` | text | The cycle request this cycle answered |
+| `scheduled` | true or false | Whether the request was a scheduled one |
 | `started_at_ms`, `finished_at_ms` | number | When the add-on took up the request, and when the cycle ended |
 | `outcome` | text | `done`; or why it stopped before replay: `sync_failed`, `full_sync_needed`; or `error` if a step went wrong |
 | `sync_in` | text | `ok`, `skipped` (sync is off or the user is not logged in), `failed`, `full_sync_needed`, `timed_out`, `not_started` |
@@ -134,6 +135,7 @@ Written by the helper to start a desktop cycle. Read by the add-on, which looks 
 | `format_version` | number | 1 |
 | `request_id` | text | New for each request. Letters, digits and hyphens, at most 64. |
 | `requested_at_ms` | number | When the user chose Sync |
+| `scheduled` | true or false, optional | True when the helper's schedule asked for the cycle. The add-on then takes the request up only once Anki is quiet: not on the review screen, no dialog or window open besides the main one, and not used for a minute (DEC-156). Absent or false: a manual sync, taken up at once. Asking again for the same `request_id` with `false` ends the wait. |
 
 A request is run once per Anki profile. A cycle cut short, by Anki quitting for example, is run again when the add-on next sees the request.
 

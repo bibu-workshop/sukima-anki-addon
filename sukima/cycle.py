@@ -78,6 +78,10 @@ class Host(Protocol):
     def sync_detail(self) -> str:
         """What the last sync_result was based on, for the log. No card content."""
     def on_review_screen(self) -> bool: ...
+    def anki_busy(self) -> str | None:
+        """Why a scheduled cycle should not start yet (DEC-156): `review_screen`,
+        `window_open` (a dialog or any window besides the main one), `in_use`
+        (used in the last minute); None when Anki is quiet."""
     def backup(self) -> bool:
         """Ask Anki for a backup and wait for it. False if it did not complete."""
     def refresh(self) -> None:
@@ -133,9 +137,21 @@ class DesktopCycle:
             request = self._new_request()
             if request is None:
                 return
-            self.request_id, self.requested_at = request
-            self.report = {"request_id": self.request_id, "started_at_ms": self.host.now_ms()}
-            self._log("cycle_start", request=self.request_id)
+            request_id, requested_at, scheduled = request
+            if scheduled:
+                # A scheduled cycle starts only once Anki is quiet; a manual one
+                # never waits for that (DEC-156). Once started, it runs as any other.
+                busy = self.host.anki_busy()
+                if busy:
+                    self._note_waiting("scheduled_cycle_waits_for_quiet", reason=busy)
+                    return
+            self.request_id, self.requested_at = request_id, requested_at
+            self.report = {
+                "request_id": self.request_id,
+                "started_at_ms": self.host.now_ms(),
+                "scheduled": scheduled,
+            }
+            self._log("cycle_start", request=self.request_id, scheduled=scheduled)
             self._wait(_WANTS_SYNC_IN)
             self._sync_in(col)
         elif self.state == _WANTS_SYNC_IN:
@@ -190,10 +206,12 @@ class DesktopCycle:
     def _waited_too_long(self) -> bool:
         return self.host.now_ms() - self.waiting_since > SYNC_TIMEOUT_MS
 
-    def _note_waiting(self, what: str) -> None:
-        if self.noted != what:
-            self._log(what)
-            self.noted = what
+    def _note_waiting(self, what: str, **fields) -> None:
+        """Logs a wait once, and again only when what is waited for changes."""
+        noted = " ".join([what, *(f"{k}={v}" for k, v in fields.items())])
+        if self.noted != noted:
+            self._log(what, **fields)
+            self.noted = noted
 
     def _sync_done(self, col: Collection, result: str) -> None:
         if self.state == _SYNCING_IN:
@@ -317,8 +335,9 @@ class DesktopCycle:
 
     # -- helpers --------------------------------------------------------------
 
-    def _new_request(self) -> tuple[str, int] | None:
-        """A cycle request that has not been finished, as (ID, when it was made)."""
+    def _new_request(self) -> tuple[str, int, bool] | None:
+        """A cycle request that has not been finished, as (ID, when it was made,
+        whether the schedule made it). A request without `scheduled` is a manual one."""
         try:
             request = read_json(self.exchange_dir / REQUEST_NAME)
             finished = read_json(self.state_dir / "cycle.json")
@@ -336,7 +355,7 @@ class DesktopCycle:
         requested_at = request.get("requested_at_ms")
         if isinstance(requested_at, bool) or not isinstance(requested_at, int):
             requested_at = self.host.now_ms()
-        return request_id, requested_at
+        return request_id, requested_at, request.get("scheduled") is True
 
     def _log(self, what: str, **fields) -> None:
         log(self.state_dir, what, **fields)
