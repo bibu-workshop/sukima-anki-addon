@@ -679,3 +679,39 @@ def test_a_card_changed_at_the_mac_since_export_does_not_get_the_watch_answer(wo
         before.queue, before.type, before.due, before.ivl, before.did
     )
     assert answers(world.col, card.id) == []
+
+
+# --- Cards for the next days (spec Part A; answer key LB-03) ---------------------
+
+
+def test_an_answer_to_a_later_days_card_is_saved_with_its_own_time(col, deck, exchange, state):
+    tomorrow = deck.review("tomorrow", overdue=-1)
+    exported = int(time.time() * 1000) - 10 * HOUR
+    batch_id = export_batch(col, deck.id, exchange, state, now_ms=exported).batch_id
+    batch = read(exchange / "batch.json")
+    assert [c["card_id"] for c in batch["cards"]] == [tomorrow.id]
+    at = int(time.time() * 1000) - HOUR
+    write_events(exchange, [event(batch_id, tomorrow, "good", at=at, taken=3000)])
+
+    result = replay(col, exchange, state)
+
+    assert outcomes(result) == [("applied", None)]
+    [row] = answers(col, tomorrow.id)
+    assert row[0] // 1000 == at // 1000 and row[2] == BUTTON["good"] and row[3] == 3000
+
+
+def test_a_later_days_card_answered_in_anki_meanwhile_is_skipped(col, deck, exchange, state):
+    tomorrow = deck.review("tomorrow", overdue=-1)
+    exported = int(time.time() * 1000) - 10 * HOUR
+    batch_id = export_batch(col, deck.id, exchange, state, now_ms=exported).batch_id
+    # Studied ahead at the Mac after the export.
+    card = col.get_card(tomorrow.id)
+    states = col._backend.get_scheduling_states(card.id)
+    card.start_timer()
+    col.sched.answer_card(col.sched.build_answer(card=card, states=states, rating=CardAnswer.GOOD))
+    write_events(exchange, [event(batch_id, tomorrow, "easy")])
+
+    result = replay(col, exchange, state)
+
+    assert outcomes(result) == [("dropped", "reviewed_elsewhere")]
+    assert len(answers(col, tomorrow.id)) == 1

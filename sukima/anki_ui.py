@@ -13,16 +13,48 @@ from pathlib import Path
 import aqt.sync
 from anki.buildinfo import version as anki_version
 from aqt import gui_hooks, mw
-from aqt.qt import QAction, QInputDialog, QTimer
+from aqt.qt import QAction, QApplication, QEvent, QInputDialog, QObject, Qt, QTimer
 from aqt.utils import tooltip
 
 from . import cycle as cycle_module
-from .cycle import DesktopCycle, parse_anki_version
+from .cycle import DesktopCycle, parse_anki_version, profile_opened
 from .export import export_batch
 from .log import log
 from .settings import EXCHANGE_DIR, choose_deck, chosen_deck_id, state_dir_for, watch_decks
 
 POLL_MS = 3000
+# A scheduled cycle waits until Anki has not been used for this long (DEC-156).
+QUIET_MS = 60_000
+
+
+def busy_reason(*, reviewing: bool, open_windows: list[str], last_used_ms: int, now_ms: int) -> str | None:
+    """Why a scheduled cycle should not start yet, or None when Anki is quiet (DEC-156).
+
+    `window_open` names the windows, for the log: `window_open:Browser,AddCards`.
+    """
+    if reviewing:
+        return "review_screen"
+    if open_windows:
+        return "window_open:" + ",".join(sorted(set(open_windows)))
+    if now_ms - last_used_ms < QUIET_MS:
+        return "in_use"
+    return None
+
+
+def open_windows(main, top_level, modal) -> list[str]:
+    """The kinds of window open besides Anki's main one: dialogs, the Browser,
+    Add, Edit, options, any modal. Tooltips, menus and the like do not count."""
+    passing = {Qt.WindowType.ToolTip, Qt.WindowType.Popup, Qt.WindowType.SplashScreen}
+    names = []
+    if modal is not None and modal is not main:
+        names.append(type(modal).__name__)
+    for widget in top_level:
+        if widget is main or widget is modal or not widget.isVisible():
+            continue
+        if widget.windowType() in passing:
+            continue
+        names.append(type(widget).__name__)
+    return names
 USER_FILES = Path(__file__).resolve().parent / "user_files"
 
 
@@ -36,6 +68,20 @@ class AnkiHost:
         self.full_sync_asked = False
         self.asked_in_this_sync = False
         self.detail = ""
+        # Opening Anki counts as using it: a scheduled cycle never opens it (DEC-130).
+        self.last_used_ms = self.now_ms()
+
+    def note_use(self) -> None:
+        """A key, click or scroll in one of Anki's windows."""
+        self.last_used_ms = self.now_ms()
+
+    def anki_busy(self) -> str | None:
+        return busy_reason(
+            reviewing=self.on_review_screen(),
+            open_windows=open_windows(mw, QApplication.topLevelWidgets(), QApplication.activeModalWidget()),
+            last_used_ms=self.last_used_ms,
+            now_ms=self.now_ms(),
+        )
 
     def sync_detail(self) -> str:
         return self.detail
@@ -161,6 +207,11 @@ class _AddOn:
         self.state_dir = state_dir_for(USER_FILES, mw.pm.name)
         self.cycle = DesktopCycle(self.host, EXCHANGE_DIR, self.state_dir)
         log(self.state_dir, "profile_opened")
+        if mw.col:
+            try:
+                profile_opened(mw.col, EXCHANGE_DIR, self.state_dir)
+            except Exception as e:
+                log(self.state_dir, "profile_opened_error", kind=type(e).__name__)
 
     def profile_closing(self) -> None:
         self.cycle = None
@@ -220,9 +271,25 @@ def _watch_ankis_sync(host: AnkiHost) -> None:
     aqt.sync.full_sync = noting_full_sync
 
 
+def _watch_use(host: AnkiHost) -> None:
+    """Learn when Anki was last used: a key, click or scroll in any of its windows.
+    Only notes the time; every event goes on unchanged."""
+    used = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}
+
+    class UseWatcher(QObject):
+        def eventFilter(self, obj, event):  # noqa: N802 (Qt's name)
+            if event.type() in used:
+                host.note_use()
+            return False
+
+    watcher = UseWatcher(mw)
+    QApplication.instance().installEventFilter(watcher)
+
+
 def start() -> None:
     addon = _AddOn()
     _watch_ankis_sync(addon.host)
+    _watch_use(addon.host)
     gui_hooks.profile_did_open.append(addon.profile_opened)
     gui_hooks.profile_will_close.append(addon.profile_closing)
     gui_hooks.sync_will_start.append(addon.sync_started)

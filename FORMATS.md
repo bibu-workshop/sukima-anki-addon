@@ -16,7 +16,9 @@ Written by the add-on at export. Read by the helper. Replaced whole at each expo
 | `batch_id` | text | A new UUID for each export |
 | `exported_at_ms` | number | When the batch was exported |
 | `deck_name` | text | The chosen deck's full name, as Anki shows it |
-| `cards` | list | At most 60 cards, in the order Anki's queue serves them. May be empty. |
+| `cards` | list | Today's cards first: at most 60, in the order Anki's queue serves them. Then the review cards due on each of the next 2 Anki days, earliest due first, each day at most the deck's daily review limit and 60. May be empty. |
+| `day_starts_ms` | list of numbers, optional | The start of each Anki day the batch covers, oldest first: today, tomorrow, the day after. Absent from an add-on older than 0.3.0, or when Anki's day could not be read |
+| `covered_until_ms` | number, optional | The end of the last covered day. Absent when `day_starts_ms` is |
 
 Each card:
 
@@ -25,6 +27,7 @@ Each card:
 | `card_id` | number | Anki's card ID |
 | `front` | list of runs | The front |
 | `back` | list of runs | The back: only what follows Anki's answer divider |
+| `available_from_ms` | number, optional | The start of the Anki day the card is due on, for a later day's card: the watch offers it only from then. Absent for today's cards |
 
 A side is a list of runs. Joining the runs' `text` in order gives the side as plain text, with `\n` for line breaks. A side is never empty and never longer than 2,000 characters.
 
@@ -94,6 +97,9 @@ Written by the add-on. Read by the helper.
 | `last_export` | object or null | The last export, below |
 | `last_replay` | object | Absent until the first replay. `at_ms`, and the counts `applied`, `dropped`, `held` of the last replay. |
 | `last_cycle` | object or null | The last desktop cycle that ended, below. Null until one has. |
+| `waiting_for` | text or null | While the add-on holds back a cycle request: `review_screen` (Anki's review screen is open), `window_open` (a dialog or window besides the main one; scheduled requests only), `in_use` (Anki used in the last minute; scheduled requests only). Null when it is not waiting. Cleared when a profile opens. Absent from earlier versions of the add-on. |
+
+When a profile opens with no watch deck chosen, the add-on writes the status at once, with `last_export.outcome` `no_deck_chosen` and no batch, so the helper can ask for a deck (design guide 1.15).
 
 `last_export`:
 
@@ -102,16 +108,18 @@ Written by the add-on. Read by the helper.
 | `at_ms` | number | When it ran |
 | `outcome` | text | `ok`; `no_deck_chosen`; `deck_missing`; `failed`. Only `ok` writes a batch. |
 | `batch_id` | text or null | The batch written, if any |
-| `exported` | number | Cards in the batch |
+| `exported` | number | Cards in the batch, the next days' included |
 | `skipped` | object | Count of cards skipped, per reason |
-| `empty_because` | text or null | When the batch has no cards: `nothing_due` (no review cards due, or today's review limit is used up) or `none_watch_ready` (every due card was skipped). Otherwise null. |
+| `empty_because` | text or null | When the batch has no cards for today (it may still hold the next days'): `nothing_due` (no review cards due, or today's review limit is used up) or `none_watch_ready` (every due card was skipped). Otherwise null. |
 | `due_count` | number or null | How many review cards are due in the chosen deck and its subdecks, today or earlier, leaving out suspended and buried cards. The daily review limit is ignored, so it can be more than Anki's deck list shows and more than the batch holds. Null when the outcome is not `ok`. Written from add-on version 0.2.0; a status file from an older add-on has no such field. |
+| `next_day_at_ms` | number or null | When Anki's day ends at the time of the export (its next day cutoff, after the rollover hour). Once it has passed, the cards on the watch are from an earlier day and the helper asks for a cycle, with or without answers waiting. Null if Anki could not say. Absent from earlier versions of the add-on. |
 
 `last_cycle`, written once when a desktop cycle ends. The helper knows its request is done when `request_id` is its own.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `request_id` | text | The cycle request this cycle answered |
+| `scheduled` | true or false | Whether the request was a scheduled one |
 | `started_at_ms`, `finished_at_ms` | number | When the add-on took up the request, and when the cycle ended |
 | `outcome` | text | `done`; or why it stopped before replay: `sync_failed`, `full_sync_needed`; or `error` if a step went wrong |
 | `sync_in` | text | `ok`, `skipped` (sync is off or the user is not logged in), `failed`, `full_sync_needed`, `timed_out`, `not_started` |
@@ -134,6 +142,7 @@ Written by the helper to start a desktop cycle. Read by the add-on, which looks 
 | `format_version` | number | 1 |
 | `request_id` | text | New for each request. Letters, digits and hyphens, at most 64. |
 | `requested_at_ms` | number | When the user chose Sync |
+| `scheduled` | true or false, optional | True when the helper's schedule asked for the cycle. The add-on then takes the request up only once Anki is quiet: not on the review screen, no dialog or window open besides the main one, and not used for a minute (DEC-156). Absent or false: a manual sync, taken up at once. Asking again for the same `request_id` with `false` ends the wait. |
 
 A request is run once per Anki profile. A cycle cut short, by Anki quitting for example, is run again when the add-on next sees the request.
 

@@ -8,7 +8,7 @@ import pytest
 
 from conftest import Deck
 from test_replay import HOUR, event, history, write_events
-from sukima.cycle import DesktopCycle, anki_is_newer_than_tested, parse_anki_version
+from sukima.cycle import DesktopCycle, anki_is_newer_than_tested, parse_anki_version, profile_opened
 from sukima.export import export_batch
 from sukima.files import write_json
 from sukima.settings import choose_deck, chosen_deck_id, state_dir_for, watch_decks
@@ -36,6 +36,7 @@ class FakeAnki:
         self.busy_with_media = False
         self.refreshed = 0
         self.full_wanted = False
+        self.busy = None
         self.cycle = None
 
     def now_ms(self): return self.clock
@@ -47,6 +48,7 @@ class FakeAnki:
     def on_review_screen(self): return self.reviewing
     def sync_detail(self): return ""
     def full_sync_wanted(self): return self.full_wanted
+    def anki_busy(self): return self.busy
 
     def start_sync(self):
         if self.busy_with_media:
@@ -85,9 +87,11 @@ class Mac:
         write_events(self.exchange, events)
         return events
 
-    def request(self, request_id="R-1"):
-        write_json(self.exchange / "cycle-request.json",
-                   {"format_version": 1, "request_id": request_id, "requested_at_ms": self.anki.clock})
+    def request(self, request_id="R-1", scheduled=None):
+        request = {"format_version": 1, "request_id": request_id, "requested_at_ms": self.anki.clock}
+        if scheduled is not None:
+            request["scheduled"] = scheduled
+        write_json(self.exchange / "cycle-request.json", request)
 
     def run(self):
         """Poll, and let each sync Anki is asked for finish, until the cycle is idle."""
@@ -284,6 +288,128 @@ def test_the_cycle_waits_until_the_user_leaves_the_review_screen(mac):
     assert len(history(mac.col)) == 2
 
 
+@pytest.mark.parametrize("busy", ["review_screen", "window_open", "in_use"])
+def test_a_scheduled_cycle_waits_until_anki_is_quiet(mac, busy):
+    """DEC-156: no review screen, no dialog or extra window, Anki unused for a minute."""
+    mac.watch_answers(2)
+    mac.request(scheduled=True)
+    mac.anki.busy = busy
+    for _ in range(3):
+        mac.cycle.poll(mac.col)
+    assert mac.anki.asked == [] and history(mac.col) == []
+    assert mac.log().count(f"scheduled_cycle_waits_for_quiet reason={busy}") == 1
+    assert "cycle_start" not in [l.split(" ")[0] for l in mac.log()]
+    mac.anki.busy = None
+    last = mac.run()
+    assert mac.anki.asked == ["sync", "backup", "sync"]
+    assert last["outcome"] == "done" and last["scheduled"] is True
+    assert len(history(mac.col)) == 2
+
+
+def test_the_reason_to_wait_is_logged_again_only_when_it_changes(mac):
+    mac.watch_answers(1)
+    mac.request(scheduled=True)
+    for busy in ["window_open", "window_open", "in_use", "in_use", "window_open"]:
+        mac.anki.busy = busy
+        mac.cycle.poll(mac.col)
+    waits = [l for l in mac.log() if l.startswith("scheduled_cycle_waits_for_quiet")]
+    assert waits == [
+        "scheduled_cycle_waits_for_quiet reason=window_open",
+        "scheduled_cycle_waits_for_quiet reason=in_use",
+        "scheduled_cycle_waits_for_quiet reason=window_open",
+    ]
+
+
+def status(mac):
+    return read(mac.exchange / "status.json")
+
+
+@pytest.mark.parametrize("busy, reported", [
+    ("review_screen", "review_screen"), ("window_open:Browser", "window_open"), ("in_use", "in_use")])
+def test_the_status_says_what_a_waiting_cycle_waits_for_and_clears_it_after(mac, busy, reported):
+    mac.watch_answers(1)
+    mac.request(scheduled=True)
+    mac.anki.busy = busy
+    mac.cycle.poll(mac.col)
+    assert status(mac)["waiting_for"] == reported
+    mac.anki.busy = None
+    mac.run()
+    assert status(mac)["waiting_for"] is None
+
+
+def test_the_status_says_a_manual_cycle_waits_for_the_review_screen(mac):
+    mac.watch_answers(1)
+    mac.request()
+    mac.anki.reviewing = True
+    mac.cycle.poll(mac.col)
+    assert status(mac)["waiting_for"] == "review_screen"
+    mac.anki.reviewing = False
+    mac.run()
+    assert status(mac)["waiting_for"] is None
+
+
+def test_the_status_is_written_only_when_the_wait_changes(mac):
+    mac.watch_answers(1)
+    mac.request(scheduled=True)
+    mac.anki.busy = "in_use"
+    mac.cycle.poll(mac.col)
+    stamp = (mac.exchange / "status.json").stat().st_mtime_ns
+    (mac.exchange / "status.json").write_text((mac.exchange / "status.json").read_text())  # same content, new time
+    stamp = (mac.exchange / "status.json").stat().st_mtime_ns
+    for _ in range(3):
+        mac.cycle.poll(mac.col)
+    assert (mac.exchange / "status.json").stat().st_mtime_ns == stamp
+
+
+def test_a_profile_with_no_deck_chosen_says_so_when_it_opens(col, exchange, state):
+    """Design guide 1.15, A1: the helper can ask for a deck instead of reporting no add-on."""
+    profile_opened(col, exchange, state)
+    written = read(exchange / "status.json")
+    assert written["last_export"]["outcome"] == "no_deck_chosen"
+    assert written["waiting_for"] is None
+    assert not (exchange / "batch.json").exists()
+
+
+def test_a_profile_with_a_deck_chosen_exports_nothing_when_it_opens(mac):
+    before = status(mac)["last_export"]
+    write_json(mac.exchange / "status.json", {**status(mac), "waiting_for": "in_use"})
+    profile_opened(mac.col, mac.exchange, mac.state)
+    assert status(mac)["last_export"] == before
+    assert status(mac)["waiting_for"] is None
+
+
+@pytest.mark.parametrize("scheduled", [None, False])
+def test_a_manual_sync_does_not_wait_for_quiet(mac, scheduled):
+    mac.watch_answers(2)
+    mac.request(scheduled=scheduled)
+    mac.anki.busy = "in_use"
+    last = mac.run()
+    assert last["outcome"] == "done" and last["scheduled"] is False
+    assert len(history(mac.col)) == 2
+
+
+def test_choosing_sync_while_a_scheduled_cycle_waits_starts_it_at_once(mac):
+    mac.watch_answers(2)
+    mac.request(scheduled=True)
+    mac.anki.busy = "window_open"
+    mac.cycle.poll(mac.col)
+    assert mac.anki.asked == []
+    mac.request(scheduled=False)  # the helper asks again for the same cycle
+    last = mac.run()
+    assert last["request_id"] == "R-1" and last["outcome"] == "done"
+    assert len(history(mac.col)) == 2
+
+
+def test_once_started_a_scheduled_cycle_is_not_stopped_by_anki_becoming_busy(mac):
+    """Quiet is asked for only before the cycle starts; the review screen wait still applies."""
+    mac.watch_answers(2)
+    mac.request(scheduled=True)
+    mac.cycle.poll(mac.col)
+    mac.anki.busy = "in_use"
+    last = mac.run()
+    assert last["outcome"] == "done"
+
+
 @pytest.mark.parametrize("version", [(26, 10), (27, 0), (26, 12)])
 def test_on_a_newer_anki_nothing_is_replayed_and_a_batch_is_still_exported(mac, version):
     events = mac.watch_answers(3)
@@ -373,7 +499,7 @@ def test_the_log_has_one_line_per_step(mac):
     mac.request()
     mac.run()
     log = mac.log()
-    for step in ("cycle_start request=R-1", "sync_in result=ok detail=", "backup result=ok", "replay_done applied=1 dropped=0 held=0", "sync_out result=ok detail=", "cycle_end request=R-1 outcome=done"):
+    for step in ("cycle_start request=R-1 scheduled=False", "sync_in result=ok detail=", "backup result=ok", "replay_done applied=1 dropped=0 held=0", "sync_out result=ok detail=", "cycle_end request=R-1 outcome=done"):
         assert log.count(step) == 1, step
     assert sum(1 for l in log if l.startswith("export ")) == 2  # setup's and the cycle's
 
