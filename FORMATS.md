@@ -16,7 +16,9 @@ Written by the add-on at export. Read by the helper. Replaced whole at each expo
 | `batch_id` | text | A new UUID for each export |
 | `exported_at_ms` | number | When the batch was exported |
 | `deck_name` | text | The chosen deck's full name, as Anki shows it |
-| `cards` | list | At most 60 cards, in the order Anki's queue serves them. May be empty. |
+| `cards` | list | Today's cards first: at most 60, in the order Anki's queue serves them. Then the review cards due on each of the next 2 Anki days, earliest due first, each day at most the deck's daily review limit and 60. May be empty. |
+| `day_starts_ms` | list of numbers, optional | The start of each Anki day the batch covers, oldest first: today, tomorrow, the day after. Absent from an add-on older than 0.3.0, or when Anki's day could not be read |
+| `covered_until_ms` | number, optional | The end of the last covered day. Absent when `day_starts_ms` is |
 
 Each card:
 
@@ -25,6 +27,7 @@ Each card:
 | `card_id` | number | Anki's card ID |
 | `front` | list of runs | The front |
 | `back` | list of runs | The back: only what follows Anki's answer divider |
+| `available_from_ms` | number, optional | The start of the Anki day the card is due on, for a later day's card: the watch offers it only from then. Absent for today's cards |
 
 A side is a list of runs. Joining the runs' `text` in order gives the side as plain text, with `\n` for line breaks. A side is never empty and never longer than 2,000 characters.
 
@@ -105,9 +108,9 @@ When a profile opens with no watch deck chosen, the add-on writes the status at 
 | `at_ms` | number | When it ran |
 | `outcome` | text | `ok`; `no_deck_chosen`; `deck_missing`; `failed`. Only `ok` writes a batch. |
 | `batch_id` | text or null | The batch written, if any |
-| `exported` | number | Cards in the batch |
+| `exported` | number | Cards in the batch, the next days' included |
 | `skipped` | object | Count of cards skipped, per reason |
-| `empty_because` | text or null | When the batch has no cards: `nothing_due` (no review cards due, or today's review limit is used up) or `none_watch_ready` (every due card was skipped). Otherwise null. |
+| `empty_because` | text or null | When the batch has no cards for today (it may still hold the next days'): `nothing_due` (no review cards due, or today's review limit is used up) or `none_watch_ready` (every due card was skipped). Otherwise null. |
 | `due_count` | number or null | How many review cards are due in the chosen deck and its subdecks, today or earlier, leaving out suspended and buried cards. The daily review limit is ignored, so it can be more than Anki's deck list shows and more than the batch holds. Null when the outcome is not `ok`. Written from add-on version 0.2.0; a status file from an older add-on has no such field. |
 | `next_day_at_ms` | number or null | When Anki's day ends at the time of the export (its next day cutoff, after the rollover hour). Once it has passed, the cards on the watch are from an earlier day and the helper asks for a cycle, with or without answers waiting. Null if Anki could not say. Absent from earlier versions of the add-on. |
 

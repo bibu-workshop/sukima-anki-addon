@@ -20,6 +20,10 @@ from .text import card_sides
 BATCH_NAME = "batch.json"
 BATCH_FORMAT_VERSION = 1
 BATCH_CAP = 60
+# The Anki days after today whose review cards go to the watch too, each studied
+# only from its own day (owner, 2026-11-05: two days ahead).
+LOOKAHEAD_DAYS = 2
+DAY_MS = 86_400_000
 
 # More than any deck's daily limits will let Anki serve.
 _FETCH_LIMIT = 10_000
@@ -96,17 +100,43 @@ def _export(
     cards: list[dict] = []
     review_counts: dict[str, int] = {}
     skipped: dict[str, int] = {}
-    for entry in _review_queue(col, deck_id):
-        if len(cards) == BATCH_CAP:
-            break
-        card = col.get_card(entry.card.id)
+
+    def take(card, available_from_ms: int | None) -> None:
+        """Adds the card if it converts; a card that does not is counted as skipped."""
         front, back, reason = card_sides(card)
         if reason:
             skipped[reason] = skipped.get(reason, 0) + 1
             log(state_dir, "skip", card=card.id, reason=reason)
-            continue
-        cards.append({"card_id": card.id, "front": front, "back": back})
+            return
+        entry = {"card_id": card.id, "front": front, "back": back}
+        if available_from_ms is not None:
+            entry["available_from_ms"] = available_from_ms
+        cards.append(entry)
         review_counts[str(card.id)] = card.reps
+
+    # Today: Anki's own queue, with its limits.
+    for entry in _review_queue(col, deck_id):
+        if len(cards) == BATCH_CAP:
+            break
+        take(col.get_card(entry.card.id), None)
+    today_count, today_skipped = len(cards), sum(skipped.values())
+
+    # The next days: the cards due on each, as a search finds them (read only),
+    # capped at the deck's daily review limit and the batch cap. Each can be
+    # studied on the watch only from the start of its own Anki day.
+    day_starts: list[int] = []
+    if day_end is not None:
+        per_day = min(_review_limit(col, deck_id), BATCH_CAP)
+        day_starts = [day_end - DAY_MS] + [day_end + i * DAY_MS for i in range(LOOKAHEAD_DAYS)]
+        for day in range(1, LOOKAHEAD_DAYS + 1):
+            start = day_end + (day - 1) * DAY_MS
+            first = len(cards)
+            for card in _due_on_day(col, deck_id, day):
+                if per_day <= 0 or len(cards) - first >= per_day:
+                    break
+                if str(card.id) in review_counts:
+                    continue
+                take(card, start)
 
     batch_id = str(uuid.uuid4())
     write_json(
@@ -127,11 +157,17 @@ def _export(
             "exported_at_ms": now_ms,
             "deck_name": deck["name"],
             "cards": cards,
+            **(
+                {"day_starts_ms": day_starts, "covered_until_ms": day_starts[-1] + DAY_MS}
+                if day_starts
+                else {}
+            ),
         },
     )
     empty_because = None
-    if not cards:
-        empty_because = NONE_WATCH_READY if skipped else NOTHING_DUE
+    if not today_count:
+        # Nothing to study today, whatever the next days hold.
+        empty_because = NONE_WATCH_READY if today_skipped else NOTHING_DUE
     result = ExportResult(
         OK, batch_id, len(cards), skipped, empty_because, _due_count(col, deck_id), next_day_at_ms=day_end
     )
@@ -150,6 +186,34 @@ def _due_count(col: Collection, deck_id: int) -> int:
     """
     decks = " OR ".join(f"did:{did}" for did in col.decks.deck_and_child_ids(deck_id))
     return len(col.find_cards(f"({decks}) is:due is:review -is:learn -is:suspended -is:buried"))
+
+
+def _due_on_day(col: Collection, deck_id: int, day: int) -> list:
+    """The deck's review cards due `day` Anki days from today, earliest due first.
+
+    A search only, like the due count: nothing is changed. Cards being relearned,
+    suspended or buried are left out, as today's batch leaves them out.
+    """
+    decks = " OR ".join(f"did:{did}" for did in col.decks.deck_and_child_ids(deck_id))
+    ids = col.find_cards(f"({decks}) prop:due={day} is:review -is:learn -is:suspended -is:buried")
+    found = [col.get_card(cid) for cid in ids]
+    return sorted(found, key=lambda c: (c.due, c.id))
+
+
+def _review_limit(col: Collection, deck_id: int) -> int:
+    """The deck's daily review limit: its own if it has one, else its preset's.
+
+    A guess for a later day: Anki cannot be asked for tomorrow's queue. Never raises.
+    """
+    try:
+        deck = col.decks.get(deck_id, default=False) or {}
+        own = deck.get("reviewLimit")
+        if isinstance(own, int) and not isinstance(own, bool):
+            return max(0, own)
+        per_day = col.decks.config_dict_for_deck_id(deck_id)["rev"]["perDay"]
+        return max(0, int(per_day))
+    except Exception:
+        return BATCH_CAP
 
 
 def _review_queue(col: Collection, deck_id: int) -> list:

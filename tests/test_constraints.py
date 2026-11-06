@@ -60,6 +60,9 @@ COLLECTION_READS = {
     # Added 2026-11-05: when Anki's day ends, so the helper knows the watch's cards
     # are yesterday's (owner's go-ahead for the daily refresh). Only reads.
     "sched.day_cutoff",
+    # Added 2026-11-05 for the next days' cards (spec Part A, owner's go-ahead):
+    # the deck's daily review limit, to cap each later day. Only reads.
+    "decks.config_dict_for_deck_id",
     DB_READ,
 }
 COLLECTION_USES = COLLECTION_CHANGES | COLLECTION_READS

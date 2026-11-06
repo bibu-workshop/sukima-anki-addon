@@ -264,3 +264,85 @@ def test_the_status_says_when_ankis_day_ends(col, deck, exchange, state):
     export_batch(col, None, exchange, state)
     written = json.loads((exchange / "status.json").read_text())
     assert written["last_export"]["next_day_at_ms"] == col.sched.day_cutoff * 1000
+
+
+# --- Cards for the next days (spec Part A; answer key LB-01) ---------------------
+
+DAY_MS = 86_400_000
+
+
+def test_the_next_two_days_cards_come_after_todays_each_with_the_start_of_its_day(col, deck, exchange, state):
+    today = [deck.review(f"today {i}", overdue=i + 1) for i in range(3)]
+    tomorrow = [deck.review(f"tomorrow {i}", overdue=-1) for i in range(2)]
+    day_after = [deck.review(f"day after {i}", overdue=-2) for i in range(4)]
+    later = deck.review("in three days", overdue=-3)
+
+    result = export_batch(col, deck.id, exchange, state)
+
+    batch = read(exchange / "batch.json")
+    cutoff = int(col.sched.day_cutoff) * 1000
+    assert batch["day_starts_ms"] == [cutoff - DAY_MS, cutoff, cutoff + DAY_MS]
+    assert batch["covered_until_ms"] == cutoff + 2 * DAY_MS
+    by_day = {}
+    for card in batch["cards"]:
+        by_day.setdefault(card.get("available_from_ms"), []).append(card["card_id"])
+    assert set(by_day[None]) == {c.id for c in today}
+    assert by_day[cutoff] == [c.id for c in tomorrow]
+    assert by_day[cutoff + DAY_MS] == [c.id for c in day_after]
+    assert later.id not in [c["card_id"] for c in batch["cards"]]
+    # Today's queue first, then the later days in order.
+    ids = [c["card_id"] for c in batch["cards"]]
+    assert ids[:3] == by_day[None]
+    assert result.exported == 9
+    # The add-on keeps the review count of every card sent, so replay can judge each.
+    record = read(batch_record_path(state, result.batch_id))
+    assert set(record["review_counts"]) == {str(i) for i in ids}
+
+
+def test_each_later_day_is_capped_at_the_decks_daily_review_limit(col, deck, exchange, state):
+    config = col.decks.config_dict_for_deck_id(deck.id)
+    config["rev"]["perDay"] = 5
+    col.decks.update_config(config)
+    for i in range(8):
+        deck.review(f"tomorrow {i}", overdue=-1)
+    for i in range(3):
+        deck.review(f"day after {i}", overdue=-2)
+
+    export_batch(col, deck.id, exchange, state)
+
+    cutoff = int(col.sched.day_cutoff) * 1000
+    days = [c.get("available_from_ms") for c in read(exchange / "batch.json")["cards"]]
+    assert days.count(cutoff) == 5
+    assert days.count(cutoff + DAY_MS) == 3
+
+
+def test_each_later_day_is_capped_at_the_batch_cap(col, deck, exchange, state):
+    for i in range(BATCH_CAP + 5):
+        deck.review(f"tomorrow {i}", overdue=-1)
+    config = col.decks.config_dict_for_deck_id(deck.id)
+    config["rev"]["perDay"] = 500
+    col.decks.update_config(config)
+
+    export_batch(col, deck.id, exchange, state)
+
+    days = [c.get("available_from_ms") for c in read(exchange / "batch.json")["cards"]]
+    assert days.count(int(col.sched.day_cutoff) * 1000) == BATCH_CAP
+
+
+def test_later_days_leave_out_suspended_buried_and_new_cards(col, deck, exchange, state):
+    kept = deck.review("kept", overdue=-1)
+    suspended = deck.review("suspended", overdue=-1)
+    col.sched.suspend_cards([suspended.id])
+    deck.new("new")
+
+    export_batch(col, deck.id, exchange, state)
+
+    assert [c["card_id"] for c in read(exchange / "batch.json")["cards"]] == [kept.id]
+
+
+def test_nothing_due_today_is_still_said_when_tomorrow_has_cards(col, deck, exchange, state):
+    deck.review("tomorrow", overdue=-1)
+    result = export_batch(col, deck.id, exchange, state)
+    assert result.empty_because == "nothing_due"
+    assert len(read(exchange / "batch.json")["cards"]) == 1
+    assert read(exchange / "status.json")["last_export"]["empty_because"] == "nothing_due"
