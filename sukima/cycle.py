@@ -39,8 +39,8 @@ STOPPED_SYNC_FAILED = "sync_failed"
 STOPPED_FULL_SYNC = "full_sync_needed"
 STOPPED_ERROR = "error"
 
-# Reasons every review event is held.
-ANKI_NEWER_THAN_TESTED = "anki_newer_than_tested"
+# Reasons every review event is held. Add-ons before 0.4.0 also held them all as
+# "anki_newer_than_tested"; since DEC-132 a newer Anki is only reported.
 NO_DECK_CHOSEN = "no_deck_chosen"
 BACKUP_FAILED = "backup_failed"
 
@@ -289,14 +289,17 @@ class DesktopCycle:
         waiting = len(pending_events(self.exchange_dir, self.state_dir))
         deck_id = chosen_deck_id(col, self.state_dir)
         held_because = None
+        # On an Anki newer than tested, answers are still replayed (DEC-132); the
+        # cycle says so, and the helper shows a note.
+        newer = anki_is_newer_than_tested(host.anki_version())
+        self.report["anki_newer_than_tested"] = newer
+        if newer:
+            self._log("version_check", result="newer_than_tested")
         if deck_id is None:
             # This profile is not set up for the watch. The answers may belong
             # to another profile, so they are kept, not judged here.
             held_because = NO_DECK_CHOSEN
             self._log("deck_check", result=held_because)
-        elif anki_is_newer_than_tested(host.anki_version()):
-            held_because = ANKI_NEWER_THAN_TESTED
-            self._log("version_check", result=held_because)
         elif waiting:
             backed_up = host.backup()
             self._log("backup", result="ok" if backed_up else "failed")

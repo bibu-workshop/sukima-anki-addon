@@ -124,7 +124,8 @@ When a profile opens with no watch deck chosen, the add-on writes the status at 
 | `outcome` | text | `done`; or why it stopped before replay: `sync_failed`, `full_sync_needed`; or `error` if a step went wrong |
 | `sync_in` | text | `ok`, `skipped` (sync is off or the user is not logged in), `failed`, `full_sync_needed`, `timed_out`, `not_started` |
 | `applied`, `dropped`, `held` | number | Counts from replay. Absent if the cycle stopped before replay. |
-| `held_because` | text or null | Set when nothing was replayed and every review event was held: `anki_newer_than_tested`, `backup_failed`, `no_deck_chosen` |
+| `held_because` | text or null | Set when nothing was replayed and every review event was held: `backup_failed`, `no_deck_chosen`. Add-ons before 0.4.0 also wrote `anki_newer_than_tested`. |
+| `anki_newer_than_tested` | true or false | Whether Anki is newer than the newest version the add-on was tested with. The answers are replayed all the same (DEC-132); the helper shows a note. Absent if the cycle stopped before replay, and from add-ons before 0.4.0. |
 | `export` | text | The outcome of the export, as in `last_export` |
 | `sync_out` | text | `ok`, `skipped`, `failed`, `full_sync_needed`, `timed_out`, `not_started`. The cycle is `done` whichever it is. |
 | `error` | text | Only with outcome `error`: the kind of error |
@@ -224,7 +225,7 @@ The helper removes a review event from iCloud when its outcome is `applied` or `
 | `dropped` | `held_three_cycles` | Anki refused the answer in three replays |
 | `held` | `anki_refused` | Anki refused the answer; it will be tried again |
 | `held` | `error` | The add-on could not judge the event; it will be tried again |
-| `held` | `anki_newer_than_tested` | Anki is newer than the add-on was tested with; nothing was replayed |
+| `held` | `anki_newer_than_tested` | Add-ons before 0.4.0 only: Anki is newer than the add-on was tested with; nothing was replayed |
 | `held` | `backup_failed` | Anki could not make a backup; nothing was replayed |
 | `held` | `no_deck_chosen` | No deck is chosen for the watch in this Anki profile; nothing was replayed |
 
