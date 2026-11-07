@@ -411,34 +411,39 @@ def test_once_started_a_scheduled_cycle_is_not_stopped_by_anki_becoming_busy(mac
 
 
 @pytest.mark.parametrize("version", [(26, 10), (27, 0), (26, 12)])
-def test_on_a_newer_anki_nothing_is_replayed_and_a_batch_is_still_exported(mac, version):
-    events = mac.watch_answers(3)
+def test_on_a_newer_anki_answers_are_still_saved_and_the_cycle_says_so(mac, version):
+    """DEC-132: warn, but save anyway."""
+    mac.watch_answers(3)
     mac.anki.version = version
     mac.request()
 
     last = mac.run()
 
-    assert history(mac.col) == []
-    assert "backup" not in mac.anki.asked
-    results = read(mac.exchange / "results.json")
-    assert [(r["event_id"], r["outcome"], r["reason"]) for r in results["results"]] == [
-        (e["event_id"], "held", "anki_newer_than_tested") for e in events
-    ]
-    assert (last["applied"], last["dropped"], last["held"]) == (0, 0, 3)
-    assert last["held_because"] == "anki_newer_than_tested"
+    assert len(history(mac.col)) == 3
+    assert "backup" in mac.anki.asked
+    assert (last["applied"], last["dropped"], last["held"]) == (3, 0, 0)
+    assert last["held_because"] is None
+    assert last["anki_newer_than_tested"] is True
     assert read(mac.exchange / "batch.json")["batch_id"] != mac.batch_id
     assert last["export"] == "ok" and last["outcome"] == "done"
 
 
-def test_holds_for_a_newer_anki_never_count_towards_dropping(mac):
+@pytest.mark.parametrize("version", [(26, 9), (26, 8)])
+def test_on_a_tested_anki_the_cycle_says_it_is_not_newer(mac, version):
     mac.watch_answers(1)
+    mac.anki.version = version
+    mac.request()
+    last = mac.run()
+    assert last["applied"] == 1
+    assert last["anki_newer_than_tested"] is False
+
+
+def test_on_a_newer_anki_with_nothing_waiting_the_cycle_still_says_so(mac):
     mac.anki.version = (27, 0)
-    for i in range(5):
-        mac.request(f"R-{i}")
-        assert mac.run()["held"] == 1
-    mac.anki.version = (26, 9)
-    mac.request("R-9")
-    assert mac.run()["applied"] == 1
+    mac.request()
+    last = mac.run()
+    assert last["outcome"] == "done"
+    assert last["anki_newer_than_tested"] is True
 
 
 @pytest.mark.parametrize("version, newer", [((26, 9), False), ((26, 8), False), ((25, 12), False), ((26, 10), True), ((27, 1), True)])
@@ -739,23 +744,6 @@ def test_a_profile_with_no_deck_chosen_keeps_the_answers_and_says_why(col, deck,
     # The profile the answers belong to still applies them.
     assert watch_profile.run()["applied"] == 2
     assert len(events) == 2
-
-
-def test_holds_for_a_newer_anki_do_not_use_up_the_three_holds(mac, monkeypatch):
-    from sukima import replay as replay_module
-
-    mac.watch_answers(1)
-    mac.anki.version = (27, 0)
-    for i in range(5):
-        mac.request(f"R-{i}")
-        mac.run()
-    assert not (mac.state / "held.json").exists()
-    # Back on a tested Anki, a refusal is the first hold, not the sixth.
-    mac.anki.version = (26, 9)
-    monkeypatch.setattr(replay_module, "_answer", lambda col, e: (_ for _ in ()).throw(RuntimeError()))
-    mac.request("R-9")
-    last = mac.run()
-    assert (last["held"], last["dropped"]) == (1, 0)
 
 
 def test_a_sync_out_that_never_reports_its_end_does_not_hang_the_cycle(mac):
