@@ -100,12 +100,16 @@ def _export(
     cards: list[dict] = []
     review_counts: dict[str, int] = {}
     skipped: dict[str, int] = {}
+    # Per covered day, today first: the due review cards left in Anki because the watch
+    # can't show them (design guide 1.17, W2). Every skip reason counts.
+    not_shown = [0] * (LOOKAHEAD_DAYS + 1)
 
-    def take(card, available_from_ms: int | None) -> None:
+    def take(card, available_from_ms: int | None, day: int = 0) -> None:
         """Adds the card if it converts; a card that does not is counted as skipped."""
         front, back, reason = card_sides(card)
         if reason:
             skipped[reason] = skipped.get(reason, 0) + 1
+            not_shown[day] += 1
             log(state_dir, "skip", card=card.id, reason=reason)
             return
         entry = {"card_id": card.id, "front": front, "back": back}
@@ -136,7 +140,7 @@ def _export(
                     break
                 if str(card.id) in review_counts:
                     continue
-                take(card, start)
+                take(card, start, day)
 
     batch_id = str(uuid.uuid4())
     write_json(
@@ -158,7 +162,11 @@ def _export(
             "deck_name": deck["name"],
             "cards": cards,
             **(
-                {"day_starts_ms": day_starts, "covered_until_ms": day_starts[-1] + DAY_MS}
+                {
+                    "day_starts_ms": day_starts,
+                    "covered_until_ms": day_starts[-1] + DAY_MS,
+                    "not_shown_by_day": not_shown,
+                }
                 if day_starts
                 else {}
             ),
