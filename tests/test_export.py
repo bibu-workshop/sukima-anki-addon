@@ -346,3 +346,29 @@ def test_nothing_due_today_is_still_said_when_tomorrow_has_cards(col, deck, exch
     assert result.empty_because == "nothing_due"
     assert len(read(exchange / "batch.json")["cards"]) == 1
     assert read(exchange / "status.json")["last_export"]["empty_because"] == "nothing_due"
+
+
+# --- Cards that stay in Anki (design guide 1.17, W2) -------------------------------
+
+
+def test_each_covered_day_says_how_many_due_cards_the_watch_cant_show(col, deck, exchange, state):
+    """The case found on 2026-11-07: 3 due today, 2 with formatting the watch can't show."""
+    deck.review("plain", overdue=1)
+    deck.review("<ul><li>a list</li></ul>", overdue=2)
+    deck.review("<a href='x'>a link</a>", overdue=3)
+    deck.review("tomorrow, a table <table><tr><td>x</td></tr></table>", overdue=-1)
+    deck.review("the day after", overdue=-2)
+    deck.new("<ul><li>a new card is never counted</li></ul>")
+
+    result = export_batch(col, deck.id, exchange, state)
+
+    batch = read(exchange / "batch.json")
+    assert batch["not_shown_by_day"] == [2, 1, 0]
+    assert len(batch["not_shown_by_day"]) == len(batch["day_starts_ms"])
+    assert sum(result.skipped.values()) == 3
+
+
+def test_nothing_skipped_gives_zeros(col, deck, exchange, state):
+    deck.review("plain")
+    export_batch(col, deck.id, exchange, state)
+    assert read(exchange / "batch.json")["not_shown_by_day"] == [0, 0, 0]
