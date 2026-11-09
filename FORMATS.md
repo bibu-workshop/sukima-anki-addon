@@ -19,7 +19,7 @@ Written by the add-on at export. Read by the helper. Replaced whole at each expo
 | `cards` | list | Today's cards first: at most 60, in the order Anki's queue serves them. Then the review cards due on each of the next 2 Anki days, earliest due first, each day at most the deck's daily review limit and 60. May be empty. |
 | `day_starts_ms` | list of numbers, optional | The start of each Anki day the batch covers, oldest first: today, tomorrow, the day after. Absent from an add-on older than 0.3.0, or when Anki's day could not be read |
 | `covered_until_ms` | number, optional | The end of the last covered day. Absent when `day_starts_ms` is |
-| `not_shown_by_day` | list of numbers, optional | For each day in `day_starts_ms`, in the same order: the due review cards skipped because the watch can't show them (any skip reason below), which stay in Anki. Only cards the export looked at count: today's queue up to the batch cap, and each later day's due cards. The watch shows today's as "2 cards stay in Anki" (design guide 1.17). Absent when `day_starts_ms` is, and from add-ons before this field |
+| `not_shown_by_day` | list of numbers, optional | For each day in `day_starts_ms`, in the same order: the due review cards skipped because the watch can't show them (any skip reason below), which stay in Anki. Only cards the export looked at count: today's queue up to the batch cap, and each later day's due cards. The watch shows today's as "2 cards stay in Anki" (design guide 1.17). Absent when `day_starts_ms` is, and from add-ons before 0.5.0 |
 
 Each card:
 
