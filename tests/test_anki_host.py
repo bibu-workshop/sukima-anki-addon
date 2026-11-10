@@ -34,9 +34,10 @@ def anki_ui(monkeypatch):
     sync = module("aqt.sync", handle_sync_error=None, full_sync=None)
     module("aqt", sync=sync, gui_hooks=None, mw=None)
     window_type = types.SimpleNamespace(Window="Window", Dialog="Dialog", ToolTip="ToolTip", Popup="Popup", SplashScreen="SplashScreen")
-    module("aqt.qt", QAction=None, QApplication=None, QEvent=None, QInputDialog=None, QObject=None,
-           Qt=types.SimpleNamespace(WindowType=window_type), QTimer=None)
-    module("aqt.utils", tooltip=None)
+    module("aqt.qt", QAction=None, QApplication=None, QComboBox=None, QDialog=None, QDialogButtonBox=None,
+           QEvent=None, QFormLayout=None, QLabel=None, QObject=None, QPalette=None,
+           Qt=types.SimpleNamespace(WindowType=window_type), QTimer=None, QVBoxLayout=None)
+    module("aqt.utils", tooltip=None, openLink=None)
     monkeypatch.delitem(sys.modules, "sukima.anki_ui", raising=False)
     import sukima.anki_ui as ui
     yield ui

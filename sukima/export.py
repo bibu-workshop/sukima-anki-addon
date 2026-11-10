@@ -48,6 +48,10 @@ class ExportResult:
     due_count: int | None = None
     # When Anki's day ends, as Anki counts days: after it, these cards are yesterday's.
     next_day_at_ms: int | None = None
+    # Today's due review cards: sent to the watch, and left in Anki because the watch
+    # can't show them (the tooltip after choosing a deck, design guide 1.18).
+    today_ready: int = 0
+    today_not_shown: int = 0
 
 
 def batch_record_path(state_dir: Path, batch_id: str) -> Path:
@@ -177,7 +181,8 @@ def _export(
         # Nothing to study today, whatever the next days hold.
         empty_because = NONE_WATCH_READY if today_skipped else NOTHING_DUE
     result = ExportResult(
-        OK, batch_id, len(cards), skipped, empty_because, _due_count(col, deck_id), next_day_at_ms=day_end
+        OK, batch_id, len(cards), skipped, empty_because, _due_count(col, deck_id), next_day_at_ms=day_end,
+        today_ready=today_count, today_not_shown=today_skipped,
     )
     return _finish(
         exchange_dir, state_dir, now_ms, deck["name"], result, [c["card_id"] for c in cards]
