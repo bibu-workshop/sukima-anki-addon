@@ -18,7 +18,7 @@ from .export import export_batch
 from .files import read_json, write_json
 from .log import log
 from .replay import hold_all, pending_events, replay
-from .settings import chosen_deck_id
+from .settings import choose_deck, chosen_deck_id, watch_decks
 from .status import update_status
 from .version import MAX_TESTED_ANKI
 
@@ -287,6 +287,7 @@ class DesktopCycle:
             self._finish(STOPPED_FULL_SYNC)
             return
         waiting = len(pending_events(self.exchange_dir, self.state_dir))
+        self._take_deck_from_watch(col)
         deck_id = chosen_deck_id(col, self.state_dir)
         held_because = None
         # On an Anki newer than tested, answers are still replayed (DEC-132); the
@@ -385,6 +386,26 @@ class DesktopCycle:
         if isinstance(requested_at, bool) or not isinstance(requested_at, int):
             requested_at = self.host.now_ms()
         return request_id, requested_at, request.get("scheduled") is True
+
+    def _take_deck_from_watch(self, col: Collection) -> None:
+        """A deck picked on the watch (design guide 1.18, DEC-170) becomes the chosen deck,
+        as if picked in the dialog, just before this cycle's export. The request file is
+        read again here, so a deck added to a request that is already under way still
+        counts. A deck that can't go to the watch (gone, or filtered) changes nothing."""
+        try:
+            request = read_json(self.exchange_dir / REQUEST_NAME)
+        except (ValueError, OSError):
+            return
+        if not isinstance(request, dict) or request.get("request_id") != self.request_id:
+            return
+        deck_id = request.get("deck_id")
+        if deck_id is None:
+            return
+        if isinstance(deck_id, bool) or not isinstance(deck_id, int) or deck_id not in {i for i, _ in watch_decks(col)}:
+            self._log("deck_from_watch", result="not_a_watch_deck")
+            return
+        choose_deck(col, self.state_dir, deck_id)
+        self._log("deck_from_watch", result="chosen", deck=deck_id)
 
     def _log(self, what: str, **fields) -> None:
         log(self.state_dir, what, **fields)

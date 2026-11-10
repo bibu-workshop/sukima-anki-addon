@@ -14,6 +14,7 @@ from anki.scheduler.v3 import QueuedCards
 
 from .files import write_json
 from .log import log
+from .settings import deck_list
 from .status import update_status
 from .text import card_sides
 
@@ -164,6 +165,8 @@ def _export(
             "batch_id": batch_id,
             "exported_at_ms": now_ms,
             "deck_name": deck["name"],
+            "deck_id": deck_id,
+            **_decks(col, state_dir),
             "cards": cards,
             **(
                 {
@@ -187,6 +190,16 @@ def _export(
     return _finish(
         exchange_dir, state_dir, now_ms, deck["name"], result, [c["card_id"] for c in cards]
     )
+
+
+def _decks(col: Collection, state_dir: Path) -> dict:
+    """The deck list for the watch (design guide 1.18), or nothing if Anki can't give it:
+    the watch then says it has no deck list yet, and the export goes on."""
+    try:
+        return {"decks": deck_list(col)}
+    except Exception as e:
+        log(state_dir, "deck_list_error", kind=type(e).__name__)
+        return {}
 
 
 def _due_count(col: Collection, deck_id: int) -> int:

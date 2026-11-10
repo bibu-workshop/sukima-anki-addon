@@ -63,6 +63,9 @@ COLLECTION_READS = {
     # Added 2026-11-05 for the next days' cards (spec Part A, owner's go-ahead):
     # the deck's daily review limit, to cap each later day. Only reads.
     "decks.config_dict_for_deck_id",
+    # Added 2026-11-10 for the deck list on the watch (design guide 1.18, DEC-173): Anki's
+    # deck tree with each deck's due count, the call Anki's own deck list makes. Only reads.
+    "sched.deck_due_tree",
     DB_READ,
 }
 COLLECTION_USES = COLLECTION_CHANGES | COLLECTION_READS

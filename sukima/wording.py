@@ -24,7 +24,7 @@ HELP_LINK = "How choosing a deck works"
 HELP_URL = "https://sukima.bibuworkshop.com/help/#choose-a-deck"
 
 # Whether this release lets the watch choose the deck (design guide 1.18, part B).
-WATCH_CAN_CHOOSE = False
+WATCH_CAN_CHOOSE = True
 
 
 def one_deck_paragraph(watch_can_choose: bool = WATCH_CAN_CHOOSE) -> str:

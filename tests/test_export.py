@@ -381,3 +381,31 @@ def test_the_result_counts_todays_cards_sent_and_left_in_anki(col, deck, exchang
     deck.review("tomorrow", overdue=-1)
     result = export_batch(col, deck.id, exchange, state)
     assert (result.today_ready, result.today_not_shown) == (1, 1)
+
+
+def test_the_batch_carries_the_deck_list_in_ankis_order_with_due_counts(col, deck, exchange, state):
+    """Design guide 1.18: Decks on the watch. Filtered decks and an empty Default are left out."""
+    grammar = Deck(col, "Japanese::Grammar")
+    grammar.review("a", overdue=1)
+    grammar.review("b", overdue=1)
+    Deck(col, "Japanese::Level 3::Kanji").review("c", overdue=1)
+    Deck(col, "Music Theory")
+    col.decks.new_filtered("Filtered Deck 1")
+
+    export_batch(col, grammar.id, exchange, state)
+
+    batch = read(exchange / "batch.json")
+    assert batch["deck_id"] == grammar.id
+    names = [d["name"] for d in batch["decks"]]
+    assert names.index("Japanese") < names.index("Japanese::Grammar") < names.index("Japanese::Level 3::Kanji")
+    assert "Filtered Deck 1" not in names and "Default" not in names
+    due = {d["name"]: d["due"] for d in batch["decks"]}
+    assert (due["Japanese::Grammar"], due["Japanese"], due["Music Theory"]) == (2, 3, 0)
+    assert all(isinstance(d["deck_id"], int) for d in batch["decks"])
+
+
+def test_an_export_goes_on_without_the_deck_list_if_anki_cant_give_it(col, deck, exchange, state, monkeypatch):
+    deck.review("plain")
+    monkeypatch.setattr(col.sched, "deck_due_tree", lambda *a: 1 / 0)
+    assert export_batch(col, deck.id, exchange, state).outcome == "ok"
+    assert "decks" not in read(exchange / "batch.json")
