@@ -12,7 +12,7 @@ The watch app and the helper are not released yet.
 
 ## How it works
 
-1. The add-on prepares your due cards inside Anki, from the deck you choose with Tools › Watch deck….
+1. The add-on prepares your due cards inside Anki, from the deck you choose with Tools › Sukima: Choose Apple Watch Deck….
 2. The Mac helper passes them to your watch through your own iCloud.
 3. You review on the watch, offline if you like.
 4. When Anki is open on your Mac, your answers are saved into your collection through Anki's own scheduler, as if you had reviewed on the Mac. Then sync as usual, and AnkiMobile and AnkiWeb see them.

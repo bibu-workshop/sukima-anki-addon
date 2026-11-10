@@ -372,3 +372,12 @@ def test_nothing_skipped_gives_zeros(col, deck, exchange, state):
     deck.review("plain")
     export_batch(col, deck.id, exchange, state)
     assert read(exchange / "batch.json")["not_shown_by_day"] == [0, 0, 0]
+
+
+def test_the_result_counts_todays_cards_sent_and_left_in_anki(col, deck, exchange, state):
+    """For the tooltip after choosing a deck (design guide 1.18): today's only."""
+    deck.review("plain", overdue=1)
+    deck.review("<ul><li>a list</li></ul>", overdue=2)
+    deck.review("tomorrow", overdue=-1)
+    result = export_batch(col, deck.id, exchange, state)
+    assert (result.today_ready, result.today_not_shown) == (1, 1)

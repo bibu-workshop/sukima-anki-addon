@@ -13,8 +13,24 @@ from pathlib import Path
 import aqt.sync
 from anki.buildinfo import version as anki_version
 from aqt import gui_hooks, mw
-from aqt.qt import QAction, QApplication, QEvent, QInputDialog, QObject, Qt, QTimer
-from aqt.utils import tooltip
+from aqt.qt import (
+    QAction,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QEvent,
+    QFormLayout,
+    QLabel,
+    QObject,
+    QPalette,
+    Qt,
+    QTimer,
+    QVBoxLayout,
+)
+from aqt.utils import openLink, tooltip
+
+from . import wording
 
 from . import cycle as cycle_module
 from .cycle import DesktopCycle, parse_anki_version, profile_opened
@@ -234,20 +250,62 @@ class _AddOn:
         if not (mw.col and self.state_dir):
             return
         decks = watch_decks(mw.col)
-        names = [name for _, name in decks]
+        if not decks:
+            return
         current = chosen_deck_id(mw.col, self.state_dir)
         index = next((i for i, (deck_id, _) in enumerate(decks) if deck_id == current), 0)
-        name, ok = QInputDialog.getItem(
-            mw, "Watch deck", "Deck to send to the watch:", names, index, False
-        )
-        if not ok or name not in names:
+        picked = deck_dialog(mw, [name for _, name in decks], index)
+        if picked is None:
             return
-        choose_deck(mw.col, self.state_dir, decks[names.index(name)][0])
-        result = export_batch(
-            mw.col, chosen_deck_id(mw.col, self.state_dir), EXCHANGE_DIR, self.state_dir
-        )
-        skipped = sum(result.skipped.values())
-        tooltip(f"Watch deck: {name}. {result.exported} cards ready, {skipped} skipped.")
+        deck_id, name = decks[picked]
+        choose_deck(mw.col, self.state_dir, deck_id)
+        result = export_batch(mw.col, deck_id, EXCHANGE_DIR, self.state_dir)
+        tooltip(wording.chosen_tooltip(name, result.today_ready, result.today_not_shown))
+
+
+def deck_dialog(parent, names: list[str], index: int) -> int | None:
+    """The "Apple Watch Deck" dialog (design guide 1.18, `Addon-DeckDialog`): a plain Qt
+    dialog in Anki's own look. Returns the index of the deck chosen, or None on Cancel."""
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(wording.DIALOG_TITLE)
+    layout = QVBoxLayout(dialog)
+
+    lead = QLabel(wording.DIALOG_LEAD)
+    font = lead.font()
+    font.setBold(True)
+    lead.setFont(font)
+    lead.setWordWrap(True)
+    layout.addWidget(lead)
+
+    menu = QComboBox()
+    menu.addItems(names)
+    menu.setCurrentIndex(index)
+    form = QFormLayout()
+    form.addRow(wording.DECK_LABEL, menu)
+    layout.addLayout(form)
+
+    # The two paragraphs in the secondary text colour, as Anki's theme sets it.
+    secondary = dialog.palette().color(QPalette.ColorRole.PlaceholderText).name()
+    for text in (wording.WHICH_CARDS, wording.one_deck_paragraph()):
+        paragraph = QLabel(text)
+        paragraph.setWordWrap(True)
+        paragraph.setStyleSheet(f"color: {secondary};")
+        layout.addWidget(paragraph)
+
+    link = QLabel(f'<a href="{wording.HELP_URL}">{wording.HELP_LINK}</a>')
+    link.setTextFormat(Qt.TextFormat.RichText)
+    link.linkActivated.connect(openLink)
+    layout.addWidget(link)
+
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+    dialog.setMinimumWidth(420)
+
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return menu.currentIndex()
 
 
 def _watch_ankis_sync(host: AnkiHost) -> None:
@@ -294,6 +352,6 @@ def start() -> None:
     gui_hooks.profile_will_close.append(addon.profile_closing)
     gui_hooks.sync_will_start.append(addon.sync_started)
     gui_hooks.sync_did_finish.append(addon.sync_finished)
-    action = QAction("Watch deck…", mw)
+    action = QAction(wording.MENU_ITEM, mw)
     action.triggered.connect(addon.choose_watch_deck)
     mw.form.menuTools.addAction(action)
