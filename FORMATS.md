@@ -16,6 +16,8 @@ Written by the add-on at export. Read by the helper. Replaced whole at each expo
 | `batch_id` | text | A new UUID for each export |
 | `exported_at_ms` | number | When the batch was exported |
 | `deck_name` | text | The chosen deck's full name, as Anki shows it |
+| `deck_id` | number, optional | The chosen deck's Anki ID. Absent from add-ons before 0.7.0 |
+| `decks` | list, optional | The decks the watch can choose from (design guide 1.18), in Anki's deck list order, parents before their sub-decks; filtered decks and what Anki's deck list hides (an empty Default deck) are left out. Each: `deck_id` (number), `name` (text, the full name as Anki shows it, "Japanese::Grammar") and `due` (number: Anki's "Due" count for the deck, review cards within the daily limits, sub-decks included). Absent from add-ons before 0.7.0, or when Anki could not give the list |
 | `cards` | list | Today's cards first: at most 60, in the order Anki's queue serves them. Then the review cards due on each of the next 2 Anki days, earliest due first, each day at most the deck's daily review limit and 60. May be empty. |
 | `day_starts_ms` | list of numbers, optional | The start of each Anki day the batch covers, oldest first: today, tomorrow, the day after. Absent from an add-on older than 0.3.0, or when Anki's day could not be read |
 | `covered_until_ms` | number, optional | The end of the last covered day. Absent when `day_starts_ms` is |
@@ -145,6 +147,7 @@ Written by the helper to start a desktop cycle. Read by the add-on, which looks 
 | `request_id` | text | New for each request. Letters, digits and hyphens, at most 64. |
 | `requested_at_ms` | number | When the user chose Sync |
 | `scheduled` | true or false, optional | True when the helper's schedule asked for the cycle. The add-on then takes the request up only once Anki is quiet: not on the review screen, no dialog or window open besides the main one, and not used for a minute (DEC-156). Absent or false: a manual sync, taken up at once. Asking again for the same `request_id` with `false` ends the wait. |
+| `deck_id` | number, optional | A deck picked on the watch (design guide 1.18). Just before the cycle's export, the add-on makes it the chosen deck, as the dialog would, so the cycle exports it. A deck that can't go to the watch (deleted or filtered) changes nothing. Absent: the chosen deck stays. Read by add-ons from 0.7.0 |
 
 A request is run once per Anki profile. A cycle cut short, by Anki quitting for example, is run again when the add-on next sees the request.
 

@@ -30,6 +30,27 @@ def watch_decks(col: Collection) -> list[tuple[int, str]]:
     return [(d.id, d.name) for d in col.decks.all_names_and_ids(include_filtered=False)]
 
 
+def deck_list(col: Collection) -> list[dict]:
+    """The decks the watch can choose from (design guide 1.18): Anki's own deck tree, in
+    Anki's order with parents before their sub-decks, each with its full name and its
+    "Due" count as Anki's deck list shows it (review cards within the daily limits,
+    sub-decks included). Filtered decks are left out, and so is what Anki's deck list
+    hides, such as an empty Default deck. One call, as Anki's deck list makes; nothing
+    is changed."""
+    found: list[dict] = []
+
+    def walk(node, path: str) -> None:
+        for child in node.children:
+            if child.filtered:
+                continue
+            name = f"{path}::{child.name}" if path else child.name
+            found.append({"deck_id": child.deck_id, "name": name, "due": child.review_count})
+            walk(child, name)
+
+    walk(col.sched.deck_due_tree(), "")
+    return found
+
+
 def choose_deck(col: Collection, state_dir: Path, deck_id: int) -> None:
     if deck_id not in {i for i, _ in watch_decks(col)}:
         raise ValueError("not a deck that can go to the watch")

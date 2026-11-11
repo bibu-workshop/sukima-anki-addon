@@ -953,3 +953,45 @@ def test_the_window_is_not_refreshed_while_the_review_screen_is_open(mac):
     for _ in range(3):
         mac.cycle.poll(mac.col)
     assert mac.anki.refreshed == 0
+
+
+# -- A deck picked on the watch (design guide 1.18, DEC-170) ---------------------------
+
+
+def test_a_deck_picked_on_the_watch_is_chosen_and_exported_after_the_old_decks_answers(mac):
+    other = Deck(mac.col, "Music Theory")
+    other.review("a chord")
+    events = mac.watch_answers(2)
+    mac.request()
+    request = read(mac.exchange / "cycle-request.json")
+    write_json(mac.exchange / "cycle-request.json", {**request, "deck_id": other.id})
+
+    last = mac.run()
+
+    # The old deck's answers still go in: they are matched by card, not deck.
+    assert (last["applied"], last["held"]) == (2, 0)
+    assert len(history(mac.col)) == 2
+    assert chosen_deck_id(mac.col, mac.state) == other.id
+    batch = read(mac.exchange / "batch.json")
+    assert (batch["deck_name"], batch["deck_id"]) == ("Music Theory", other.id)
+    assert [c["card_id"] for c in batch["cards"]] != [e["card_id"] for e in events]
+    assert "deck_from_watch result=chosen deck=%d" % other.id in mac.log()
+
+
+def test_a_deck_that_cant_go_to_the_watch_changes_nothing(mac):
+    filtered = mac.col.decks.new_filtered("Filtered Deck 1")
+    for deck_id in (filtered, 999, "1", True):
+        mac.request(request_id=f"R-{deck_id}")
+        request = read(mac.exchange / "cycle-request.json")
+        write_json(mac.exchange / "cycle-request.json", {**request, "deck_id": deck_id})
+        assert mac.run()["outcome"] == "done"
+        assert chosen_deck_id(mac.col, mac.state) == mac.deck.id
+    assert sum("deck_from_watch result=not_a_watch_deck" in l for l in mac.log()) == 4
+
+
+def test_a_request_without_a_deck_keeps_the_chosen_one(mac):
+    Deck(mac.col, "Music Theory")
+    mac.request()
+    mac.run()
+    assert chosen_deck_id(mac.col, mac.state) == mac.deck.id
+    assert not any("deck_from_watch" in l for l in mac.log())
