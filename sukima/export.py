@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -16,10 +18,18 @@ from .files import write_json
 from .log import log
 from .settings import deck_list
 from .status import update_status
-from .text import card_sides
+from .blocks import card_sides_v2
+from .images import helper_reads_format_2, prepare
+from .text import IMAGE, card_sides
 
 BATCH_NAME = "batch.json"
 BATCH_FORMAT_VERSION = 1
+# Batch format 2: cards with images, lists, superscript, subscript or links (image cards spec).
+BATCH_FORMAT_VERSION_2 = 2
+IMAGES_DIR = "images"
+# The prepared images of one batch together, at most (DEC-187 a); distinct images count once.
+IMAGE_CAP_BYTES = 8_000_000
+BATCH_FULL = "batch_full"
 BATCH_CAP = 60
 # The Anki days after today whose review cards go to the watch too, each studied
 # only from its own day (owner, 2026-11-05: two days ahead).
@@ -109,15 +119,69 @@ def _export(
     # can't show them (design guide 1.17, W2). Every skip reason counts.
     not_shown = [0] * (LOOKAHEAD_DAYS + 1)
 
+    # Format 2 only when the helper has said it passes it on (FORMATS.md, cycle request).
+    format_2 = helper_reads_format_2(state_dir)
+    media_dir = col.media.dir()
+    image_cache = state_dir / "images"
+    images: dict[str, dict] = {}  # hash -> the batch's image entry
+    image_files: dict[str, Path] = {}  # file name -> prepared file in the cache
+    image_bytes = 0
+
+    def with_images(blocks: list[dict] | None, new: dict[str, tuple]) -> tuple[list[dict] | None, str | None]:
+        """The side's blocks with each image's file name replaced by its prepared hash."""
+        if blocks is None:
+            return None, None
+        out = []
+        for b in blocks:
+            if "image" not in b:
+                out.append(b)
+                continue
+            prepared = prepare(Path(media_dir) / b["image"], image_cache)
+            if prepared is None:
+                return None, IMAGE
+            if prepared.hash not in images and prepared.hash not in new:
+                new[prepared.hash] = (prepared, b.get("alt"))
+            elif prepared.hash in new and new[prepared.hash][1] is None and b.get("alt"):
+                new[prepared.hash] = (prepared, b.get("alt"))
+            out.append({"image": prepared.hash, "beside_previous": b["beside_previous"]})
+        return out, None
+
     def take(card, available_from_ms: int | None, day: int = 0) -> None:
         """Adds the card if it converts; a card that does not is counted as skipped."""
-        front, back, reason = card_sides(card)
+        nonlocal image_bytes
+        front_blocks = back_blocks = None
+        new: dict[str, tuple] = {}
+        if format_2:
+            front, back, front_blocks, back_blocks, reason = card_sides_v2(card, media_dir)
+            if not reason:
+                front_blocks, reason = with_images(front_blocks, new)
+            if not reason:
+                back_blocks, reason = with_images(back_blocks, new)
+            if not reason and image_bytes + sum(p.bytes for p, _ in new.values()) > IMAGE_CAP_BYTES:
+                reason = BATCH_FULL
+        else:
+            front, back, reason = card_sides(card)
         if reason:
             skipped[reason] = skipped.get(reason, 0) + 1
             not_shown[day] += 1
             log(state_dir, "skip", card=card.id, reason=reason)
             return
+        for h, (prepared, alt) in new.items():
+            entry_image = {
+                "hash": h, "width": prepared.width, "height": prepared.height,
+                "file_width": prepared.file_width, "file_height": prepared.file_height,
+                "transparent": prepared.transparent, "bytes": prepared.bytes,
+            }
+            if alt:
+                entry_image["description"] = alt
+            images[h] = entry_image
+            image_files[prepared.file_name] = image_cache / prepared.file_name
+            image_bytes += prepared.bytes
         entry = {"card_id": card.id, "front": front, "back": back}
+        if front_blocks is not None:
+            entry["front_blocks"] = front_blocks
+        if back_blocks is not None:
+            entry["back_blocks"] = back_blocks
         if available_from_ms is not None:
             entry["available_from_ms"] = available_from_ms
         cards.append(entry)
@@ -148,6 +212,9 @@ def _export(
                 take(card, start, day)
 
     batch_id = str(uuid.uuid4())
+    uses_format_2 = any("front_blocks" in c or "back_blocks" in c for c in cards)
+    # The image files first: the helper sends a batch only once every file it names is there.
+    _write_images(exchange_dir, image_files if uses_format_2 else {})
     write_json(
         batch_record_path(state_dir, batch_id),
         {
@@ -161,10 +228,11 @@ def _export(
     write_json(
         exchange_dir / BATCH_NAME,
         {
-            "format_version": BATCH_FORMAT_VERSION,
+            "format_version": BATCH_FORMAT_VERSION_2 if uses_format_2 else BATCH_FORMAT_VERSION,
             "batch_id": batch_id,
             "exported_at_ms": now_ms,
             "deck_name": deck["name"],
+            **({"images": list(images.values())} if uses_format_2 else {}),
             "deck_id": deck_id,
             **_decks(col, state_dir),
             "cards": cards,
@@ -190,6 +258,23 @@ def _export(
     return _finish(
         exchange_dir, state_dir, now_ms, deck["name"], result, [c["card_id"] for c in cards]
     )
+
+
+def _write_images(exchange_dir: Path, files: dict[str, Path]) -> None:
+    """The batch's prepared images in `images/`, by hash; any other file there is removed."""
+    folder = exchange_dir / IMAGES_DIR
+    if not files and not folder.exists():
+        return
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, source in files.items():
+        target = folder / name
+        if not target.exists():
+            tmp = folder / f".{name}.tmp"
+            shutil.copyfile(source, tmp)
+            os.replace(tmp, target)
+    for old in folder.iterdir():
+        if old.name not in files and not old.name.startswith("."):
+            old.unlink()
 
 
 def _decks(col: Collection, state_dir: Path) -> dict:

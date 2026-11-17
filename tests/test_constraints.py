@@ -66,6 +66,10 @@ COLLECTION_READS = {
     # Added 2026-11-10 for the deck list on the watch (design guide 1.18, DEC-173): Anki's
     # deck tree with each deck's due count, the call Anki's own deck list makes. Only reads.
     "sched.deck_due_tree",
+    # Added 2026-11-16 for image cards (image cards spec, ticket 04; DEC-180 a): the path of
+    # Anki's media folder, whose image files the add-on reads to prepare them. Only reads;
+    # nothing is written there (the prepared files go to the add-on's own state folder).
+    "media.dir",
     DB_READ,
 }
 COLLECTION_USES = COLLECTION_CHANGES | COLLECTION_READS

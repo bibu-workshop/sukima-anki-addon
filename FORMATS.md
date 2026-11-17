@@ -127,7 +127,7 @@ Each block is one of:
 
 Runs in format 2 may also carry the styles `superscript` and `subscript`. Link text is plain text.
 
-New skip reason in format 2: `image_missing`, an image whose file is not in Anki's media folder; reported just after `image`.
+New skip reasons in format 2: `image_missing`, an image whose file is not in Anki's media folder, reported just after `image`; `batch_full`, a card whose new images would take the batch's prepared images past 8 MB (distinct images counted once), reported last. Both count in `not_shown_by_day`. An image Qt can't read skips its card as `image`.
 
 ## Status: `status.json`, format version 1
 
