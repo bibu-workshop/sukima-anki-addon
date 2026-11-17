@@ -219,7 +219,7 @@ def card_sides_v2(card, media_dir: str):
     field_names = {f.get("name") for f in note_type.get("flds", [])}
     if note_type.get("originalStockKind") == t._STOCK_KIND_IMAGE_OCCLUSION or _IO_ENHANCED_FIELDS <= field_names:
         reasons.add(t.IMAGE_OCCLUSION)
-    if t.hides_content(note_type.get("css", "")):
+    if t.note_type_hides(note_type.get("css", ""), question + answer):
         reasons.add(t.HIDDEN_CONTENT)
     for tag in av_tags:
         is_video = isinstance(tag, t.SoundOrVideoTag) and t._VIDEO_FILE.search(tag.filename)

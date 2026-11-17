@@ -100,6 +100,129 @@ def hides_content(css: str) -> bool:
     return bool(_HIDES.search(_CSS_COMMENT.sub("", css or "")))
 
 
+# A note type's hiding rule that can only hide an image, and only an image the card doesn't
+# have, hides nothing on that card (DEC-184, extended by the owner on 2026-11-17 for Ultimate
+# Geography's blurred-image rules). Anything this can't read for sure still skips the card.
+_IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
+_TAG_ATTR = re.compile(r"""([\w:-]+)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""")
+_ATTR_SELECTOR = re.compile(
+    r"""\[\s*([\w-]+)\s*(?:([*^$]?=)\s*("[^"]*"|'[^']*'|[\w-]+)\s*(i)?)?\s*\]""", re.I
+)
+
+
+def _images(html: str) -> list[dict[str, str]]:
+    """Each <img> of the card, as its attributes (names in lower case)."""
+    images = []
+    for tag in _IMG_TAG.findall(html or ""):
+        attrs = {}
+        for name, value in _TAG_ATTR.findall(tag[4:]):
+            attrs[name.lower()] = value.strip("\"'")
+        images.append(attrs)
+    return images
+
+
+def _compounds(selector: str) -> list[str] | None:
+    """A selector's compound parts, split at its combinators; None if it can't be read."""
+    parts, current, depth, quote = [], "", 0, None
+    for ch in selector.strip():
+        if quote:
+            current += ch
+            quote = None if ch == quote else quote
+        elif ch in "\"'":
+            current += ch
+            quote = ch
+        elif ch == "[":
+            depth += 1
+            current += ch
+        elif ch == "]":
+            depth -= 1
+            current += ch
+        elif depth == 0 and (ch.isspace() or ch in ">+~"):
+            if current:
+                parts.append(current)
+            current = ""
+        else:
+            current += ch
+    if quote or depth:
+        return None
+    if current:
+        parts.append(current)
+    return parts or None
+
+
+def _img_conditions(compound: str) -> list[tuple[str, str | None, str | None, bool]] | None:
+    """For `img` followed only by attribute selectors, those selectors; otherwise None."""
+    if not compound.lower().startswith("img"):
+        return None
+    rest = compound[3:]
+    conditions = []
+    while rest:
+        match = _ATTR_SELECTOR.match(rest)
+        if not match:
+            return None
+        name, op, value, insensitive = match.groups()
+        conditions.append((name.lower(), op, value.strip("\"'") if value else None, bool(insensitive)))
+        rest = rest[match.end():]
+    return conditions
+
+
+def _meets(image: dict[str, str], conditions) -> bool:
+    for name, op, value, insensitive in conditions:
+        actual = image.get(name)
+        if actual is None:
+            return False
+        if op is None:
+            continue
+        a, v = (actual.lower(), value.lower()) if insensitive else (actual, value)
+        if not {"=": a == v, "*=": v in a, "^=": a.startswith(v), "$=": a.endswith(v)}[op]:
+            return False
+    return True
+
+
+def _hides_nothing_here(selector: str, images: list[dict[str, str]]) -> bool:
+    """A selector ending on an image, one of whose image parts no image of the card meets."""
+    parts = _compounds(selector)
+    if not parts or _img_conditions(parts[-1]) is None:
+        return False
+    for part in parts:
+        conditions = _img_conditions(part)
+        if conditions is not None and not any(_meets(image, conditions) for image in images):
+            return True
+    return False
+
+
+def note_type_hides(css: str, card_html: str) -> bool:
+    """Whether a note type's styling may hide something on this card (question and answer
+    together). A hiding rule is set aside only when it can hide nothing on it (above)."""
+    css = _CSS_COMMENT.sub("", css or "")
+    if not hides_content(css):
+        return False
+    images = _images(card_html)
+    position = 0
+    while position < len(css):
+        open_at = css.find("{", position)
+        if open_at < 0:
+            # Text after the last rule: a hiding match there (an @import) counts.
+            return hides_content(css[position:])
+        prelude = css[position:open_at].strip()
+        depth, close_at = 1, open_at + 1
+        while close_at < len(css) and depth:
+            depth += {"{": 1, "}": -1}.get(css[close_at], 0)
+            close_at += 1
+        body = css[open_at + 1:close_at - 1]
+        position = close_at
+        if hides_content(prelude):  # an @import before this rule
+            return True
+        if not hides_content(body):
+            continue
+        # An at-rule (@media and the like) holding a hiding rule: not read here.
+        if prelude.startswith("@") or "{" in body:
+            return True
+        if not all(_hides_nothing_here(s, images) for s in prelude.split(",")):
+            return True
+    return False
+
+
 def _inline_style_reasons(style: str) -> set[str]:
     reasons = set()
     style = _CSS_COMMENT.sub("", style)
@@ -258,7 +381,7 @@ def card_sides(card) -> tuple[list[dict], list[dict], str | None]:
         return [], [], RENDER_ERROR
     if note_type.get("originalStockKind") == _STOCK_KIND_IMAGE_OCCLUSION:
         reasons.add(IMAGE_OCCLUSION)
-    if hides_content(note_type.get("css", "")):
+    if note_type_hides(note_type.get("css", ""), question + answer):
         reasons.add(HIDDEN_CONTENT)
     for tag in av_tags:
         is_video = isinstance(tag, SoundOrVideoTag) and _VIDEO_FILE.search(tag.filename)
