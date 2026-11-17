@@ -89,7 +89,7 @@ A card that is not watch-ready is skipped: left out of the batch, untouched, and
 
 ## Batch: `batch.json`, format version 2
 
-Format 2 adds cards with images (image cards spec, `apps/.scratch/image-cards/spec.md`; DEC-175, DEC-180, DEC-187). It is format 1 with the fields below; everything not named here is as in format 1. An add-on writes format 2 only when the batch has a card with an image, and format 1 otherwise. A watch that reads only format 1 never gets format 2: the helper turns it back into format 1 first (image cards dropped and counted in `not_shown_by_day`, the image table removed).
+Format 2 adds cards with images, lists, superscript, subscript and link text (image cards spec, `apps/.scratch/image-cards/spec.md`; DEC-175, DEC-180, DEC-187). It is format 1 with the fields below; everything not named here is as in format 1. An add-on writes format 2 only when the helper's cycle request says it passes format 2 on (`batch_formats`) and the batch has a card that needs it; format 1 otherwise, where all of these skip the card as before. A watch that reads only format 1 never gets format 2: the helper turns it back into format 1 first (image cards dropped and counted in `not_shown_by_day`, the image table removed).
 
 Each prepared image is a file in the folder `images/` beside `batch.json`, named by its hash and its type: `images/<hash>.jpg` or `images/<hash>.png`. The add-on writes the image files before `batch.json`; the helper sends a batch only when every file it names is there and its SHA-256 matches.
 
@@ -115,7 +115,7 @@ Card, added:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `front_blocks`, `back_blocks` | list, optional | Present for a side with an image: the side in the card's own order, as blocks. `front` and `back` still hold the side's text alone, which may then be empty |
+| `front_blocks`, `back_blocks` | list, optional | Present for a side with an image, a list, superscript, subscript or a link: the side in the card's own order, as blocks. `front` and `back` still hold the side's text alone (list items on their own lines with their markers), which may then be empty. A card with either is a format 2 card: a watch that reads only format 1 does not get it |
 
 Each block is one of:
 
@@ -123,6 +123,11 @@ Each block is one of:
 |---|---|---|
 | Text | `text`: list of runs | A stretch of the side's text, as in format 1 |
 | Image | `image`: text, `beside_previous`: true or false | An image of the batch's `images`, by its hash. `beside_previous`: it follows the previous image with nothing between, so the watch sets the two in one row |
+| List item | `list_item`: list of runs, `level`: 1 or 2, `marker`: text | One item of a list: `•` (`◦` at level 2) or its number with a full stop, `3.`. A third level skips the card (`other_markup`) |
+
+Runs in format 2 may also carry the styles `superscript` and `subscript`. Link text is plain text.
+
+New skip reason in format 2: `image_missing`, an image whose file is not in Anki's media folder; reported just after `image`.
 
 ## Status: `status.json`, format version 1
 
@@ -184,6 +189,7 @@ Written by the helper to start a desktop cycle. Read by the add-on, which looks 
 | `request_id` | text | New for each request. Letters, digits and hyphens, at most 64. |
 | `requested_at_ms` | number | When the user chose Sync |
 | `scheduled` | true or false, optional | True when the helper's schedule asked for the cycle. The add-on then takes the request up only once Anki is quiet: not on the review screen, no dialog or window open besides the main one, and not used for a minute (DEC-156). Absent or false: a manual sync, taken up at once. Asking again for the same `request_id` with `false` ends the wait. |
+| `batch_formats` | list of numbers, optional | The batch formats the helper can pass on to the watch. With 2 in it the add-on may write format 2. Absent from helpers before image cards: format 1 |
 | `deck_id` | number, optional | A deck picked on the watch (design guide 1.18). Just before the cycle's export, the add-on makes it the chosen deck, as the dialog would, so the cycle exports it. A deck that can't go to the watch (deleted or filtered) changes nothing. Absent: the chosen deck stays. Read by add-ons from 0.7.0 |
 
 A request is run once per Anki profile. A cycle cut short, by Anki quitting for example, is run again when the add-on next sees the request.
