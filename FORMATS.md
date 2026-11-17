@@ -87,6 +87,43 @@ A card that is not watch-ready is skipped: left out of the batch, untouched, and
 | `empty_side` | A front or back with no visible text |
 | `render_error` | Anki could not render it |
 
+## Batch: `batch.json`, format version 2
+
+Format 2 adds cards with images (image cards spec, `apps/.scratch/image-cards/spec.md`; DEC-175, DEC-180, DEC-187). It is format 1 with the fields below; everything not named here is as in format 1. An add-on writes format 2 only when the batch has a card with an image, and format 1 otherwise. A watch that reads only format 1 never gets format 2: the helper turns it back into format 1 first (image cards dropped and counted in `not_shown_by_day`, the image table removed).
+
+Each prepared image is a file in the folder `images/` beside `batch.json`, named by its hash and its type: `images/<hash>.jpg` or `images/<hash>.png`. The add-on writes the image files before `batch.json`; the helper sends a batch only when every file it names is there and its SHA-256 matches.
+
+Batch, added:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `format_version` | number | 2 |
+| `images` | list | Each distinct image the cards name, once, even when it is on both sides of a card or on several cards |
+
+Each image:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `hash` | text | SHA-256 of the prepared file, in lowercase hex |
+| `width`, `height` | number | The original's size in pixels. The watch shows 1 pixel as 1 point and never enlarges |
+| `file_width`, `file_height` | number | The prepared file's size in pixels: `max(416 / width, 496 / height)` times the original, never larger than it |
+| `transparent` | true or false | Whether the original has any transparent pixel (a rasterised SVG included). A transparent image is a PNG; any other is JPEG at quality 70 |
+| `description` | text, optional | The image's `alt` text, when it has one that is not a file name |
+| `bytes` | number | The prepared file's size in bytes |
+
+Card, added:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `front_blocks`, `back_blocks` | list, optional | Present for a side with an image: the side in the card's own order, as blocks. `front` and `back` still hold the side's text alone, which may then be empty |
+
+Each block is one of:
+
+| Block | Fields | Meaning |
+|---|---|---|
+| Text | `text`: list of runs | A stretch of the side's text, as in format 1 |
+| Image | `image`: text, `beside_previous`: true or false | An image of the batch's `images`, by its hash. `beside_previous`: it follows the previous image with nothing between, so the watch sets the two in one row |
+
 ## Status: `status.json`, format version 1
 
 Written by the add-on. Read by the helper.
@@ -172,6 +209,7 @@ Each review event, as the watch recorded it:
 | `answered_at_ms` | number | The moment of the rating |
 | `time_taken_ms` | number | From the card appearing to the rating. Not negative. |
 | `batch_id` | text | The batch the card came from |
+| `batch_formats` | list of numbers, optional | The batch formats the watch that wrote the event reads, for the helper's format gate. Absent from watches before image cards. The add-on ignores it |
 
 ```json
 {
