@@ -404,6 +404,30 @@ def test_the_batch_carries_the_deck_list_in_ankis_order_with_due_counts(col, dec
     assert all(isinstance(d["deck_id"], int) for d in batch["decks"])
 
 
+def test_the_deck_list_says_which_groups_ankis_deck_list_shows_closed(col, deck, exchange, state):
+    """Design guide 1.25: each group starts on the watch as Anki's deck list shows it (its
+    "reviewer" state, not Browse's). Only decks with sub-decks say it."""
+    from anki.decks import DeckCollapseScope
+    grammar = Deck(col, "Japanese::Grammar")
+    grammar.review("a", overdue=1)
+    Deck(col, "Archived::Old").review("b", overdue=1)
+    Deck(col, "Music Theory")
+    for name, closed in [("Japanese", False), ("Archived", True)]:
+        col.decks.set_collapsed(deck_id=col.decks.id(name), collapsed=closed, scope=DeckCollapseScope.REVIEWER)
+    # Browse's own state is not the deck list's.
+    col.decks.set_collapsed(deck_id=col.decks.id("Japanese"), collapsed=True, scope=DeckCollapseScope.BROWSER)
+    before = {d["name"]: (d.get("collapsed"), d.get("browserCollapsed")) for d in col.decks.all()}
+
+    export_batch(col, grammar.id, exchange, state)
+
+    decks = {d["name"]: d for d in read(exchange / "batch.json")["decks"]}
+    assert decks["Japanese"]["collapsed"] is False
+    assert decks["Archived"]["collapsed"] is True
+    assert "collapsed" not in decks["Japanese::Grammar"] and "collapsed" not in decks["Music Theory"]
+    # Read only: Anki's states are as they were.
+    assert {d["name"]: (d.get("collapsed"), d.get("browserCollapsed")) for d in col.decks.all()} == before
+
+
 def test_an_export_goes_on_without_the_deck_list_if_anki_cant_give_it(col, deck, exchange, state, monkeypatch):
     deck.review("plain")
     monkeypatch.setattr(col.sched, "deck_due_tree", lambda *a: 1 / 0)

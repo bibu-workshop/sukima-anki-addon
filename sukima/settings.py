@@ -31,10 +31,11 @@ def watch_decks(col: Collection) -> list[tuple[int, str]]:
 
 
 def deck_list(col: Collection) -> list[dict]:
-    """The decks the watch can choose from (design guide 1.18): Anki's own deck tree, in
-    Anki's order with parents before their sub-decks, each with its full name and its
+    """The decks the watch can choose from (design guide 1.18, 1.25): Anki's own deck tree, in
+    Anki's order with parents before their sub-decks, each with its full name, its
     "Due" count as Anki's deck list shows it (review cards within the daily limits,
-    sub-decks included). Filtered decks are left out, and so is what Anki's deck list
+    sub-decks included), and for a deck with sub-decks whether Anki's deck list shows it
+    closed. Filtered decks are left out, and so is what Anki's deck list
     hides, such as an empty Default deck. One call, as Anki's deck list makes; nothing
     is changed."""
     found: list[dict] = []
@@ -44,7 +45,12 @@ def deck_list(col: Collection) -> list[dict]:
             if child.filtered:
                 continue
             name = f"{path}::{child.name}" if path else child.name
-            found.append({"deck_id": child.deck_id, "name": name, "due": child.review_count})
+            entry = {"deck_id": child.deck_id, "name": name, "due": child.review_count}
+            # Whether Anki's deck list shows the group closed (+), for the watch's tree (design
+            # guide 1.25): sent only on decks with sub-decks, since Anki marks the others too.
+            if any(not c.filtered for c in child.children):
+                entry["collapsed"] = child.collapsed
+            found.append(entry)
             walk(child, name)
 
     walk(col.sched.deck_due_tree(), "")
