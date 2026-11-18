@@ -143,9 +143,14 @@ def remember_helper_formats(state_dir: Path, formats) -> None:
         write_json(path, {"batch_formats": valid})
 
 
-def helper_reads_format_2(state_dir: Path) -> bool:
+def helper_reads_format(state_dir: Path, version: int) -> bool:
+    """Whether the helper said, in its last cycle request, that it passes on `version`."""
     try:
         data = read_json(state_dir / _FORMATS_FILE)
     except (ValueError, OSError):
         return False
-    return isinstance(data, dict) and 2 in (data.get("batch_formats") or [])
+    return isinstance(data, dict) and version in (data.get("batch_formats") or [])
+
+
+def helper_reads_format_2(state_dir: Path) -> bool:
+    return helper_reads_format(state_dir, 2)

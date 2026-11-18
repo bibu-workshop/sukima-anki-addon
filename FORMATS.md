@@ -129,6 +129,35 @@ Runs in format 2 may also carry the styles `superscript` and `subscript`. Link t
 
 New skip reasons in format 2: `image_missing`, an image whose file is not in Anki's media folder, reported just after `image`; `batch_full`, a card whose new images would take the batch's prepared images past 8 MB (distinct images counted once), reported last. Both count in `not_shown_by_day`. An image Qt can't read skips its card as `image`.
 
+## Batch: `batch.json`, format version 3
+
+Format 2 with sounds (sound cards spec). Written only when the helper's last cycle request listed 3 in `batch_formats`; otherwise a card with a sound stays in Anki as `audio`, as before. A batch with no sound card is written as format 2 or 1. A watch that doesn't read 3 never gets it: the helper turns it into format 2 (sound cards dropped and counted in `not_shown_by_day`, `sounds` removed), and into format 1 as before.
+
+Batch, added:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `format_version` | number | 3 |
+| `sounds` | list | Each distinct sound file the cards name, once, even when it is on both sides of a card or on several cards |
+
+Each sound:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `hash` | text | SHA-256 of the file, in lowercase hex. The file is Anki's own, unchanged, in `sounds/<hash>.<type>` |
+| `type` | text | Its extension, lower case: `mp3`, `m4a`, `aac`, `wav`, `caf` or `aiff` |
+| `bytes` | number | The file's size in bytes, at most 1,000,000 |
+
+A new block:
+
+| Block | Fields | Meaning |
+|---|---|---|
+| Sound | `sound`: text, `beside_previous`: true or false | A sound of the batch's `sounds`, by its hash, where Anki had the `[sound:…]` tag. `beside_previous`: it follows the previous sound with nothing between, so the watch sets the two side by side |
+
+A side whose only content is sound has blocks and empty `front`/`back` text; it is not `empty_side`. The back holds only what follows Anki's answer divider, so a front sound repeated by `{{FrontSide}}` is not on it; a sound file on both sides has one hash, and the watch shows it once.
+
+Images and sounds share the 8 MB cap: `batch_full` counts both, distinct files once. New skip reason in format 3: `sound_missing`, a sound whose file is not in Anki's media folder, reported just after `audio`. Still `audio`: text to speech (`{{tts}}`), an HTML `<audio>` element, a type not listed above (`.ogg`, `.opus`, `.flac`…), a file over 1 MB. Still `video`: a video file.
+
 ## Status: `status.json`, format version 1
 
 Written by the add-on. Read by the helper.
@@ -189,7 +218,7 @@ Written by the helper to start a desktop cycle. Read by the add-on, which looks 
 | `request_id` | text | New for each request. Letters, digits and hyphens, at most 64. |
 | `requested_at_ms` | number | When the user chose Sync |
 | `scheduled` | true or false, optional | True when the helper's schedule asked for the cycle. The add-on then takes the request up only once Anki is quiet: not on the review screen, no dialog or window open besides the main one, and not used for a minute (DEC-156). Absent or false: a manual sync, taken up at once. Asking again for the same `request_id` with `false` ends the wait. |
-| `batch_formats` | list of numbers, optional | The batch formats the helper can pass on to the watch. With 2 in it the add-on may write format 2. Absent from helpers before image cards: format 1 |
+| `batch_formats` | list of numbers, optional | The batch formats the helper can pass on to the watch. With 2 in it the add-on may write format 2; with 2 and 3, format 3. Absent from helpers before image cards: format 1 |
 | `deck_id` | number, optional | A deck picked on the watch (design guide 1.18). Just before the cycle's export, the add-on makes it the chosen deck, as the dialog would, so the cycle exports it. A deck that can't go to the watch (deleted or filtered) changes nothing. Absent: the chosen deck stays. Read by add-ons from 0.7.0 |
 
 A request is run once per Anki profile. A cycle cut short, by Anki quitting for example, is run again when the add-on next sees the request.

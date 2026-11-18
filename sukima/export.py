@@ -20,12 +20,16 @@ from .settings import deck_list
 from .status import update_status
 from .blocks import card_sides_v2
 from .images import helper_reads_format_2, prepare
+from .sounds import helper_reads_format_3, sound_file
 from .text import IMAGE, card_sides
 
 BATCH_NAME = "batch.json"
 BATCH_FORMAT_VERSION = 1
 # Batch format 2: cards with images, lists, superscript, subscript or links (image cards spec).
 BATCH_FORMAT_VERSION_2 = 2
+# Format 3: sound cards (sound cards spec).
+BATCH_FORMAT_VERSION_3 = 3
+SOUNDS_DIR = "sounds"
 IMAGES_DIR = "images"
 # The prepared images of one batch together, at most (DEC-187 a); distinct images count once.
 IMAGE_CAP_BYTES = 8_000_000
@@ -121,10 +125,15 @@ def _export(
 
     # Format 2 only when the helper has said it passes it on (FORMATS.md, cycle request).
     format_2 = helper_reads_format_2(state_dir)
+    # Format 3, sound cards, likewise; a helper that passes on 3 passes on 2.
+    format_3 = format_2 and helper_reads_format_3(state_dir)
     media_dir = col.media.dir()
     image_cache = state_dir / "images"
     images: dict[str, dict] = {}  # hash -> the batch's image entry
     image_files: dict[str, Path] = {}  # file name -> prepared file in the cache
+    sounds: dict[str, dict] = {}  # hash -> the batch's sound entry
+    sound_files: dict[str, Path] = {}  # file name -> the file in Anki's media folder
+    # Images and sounds share the cap (DEC-190 d): distinct files, counted once.
     image_bytes = 0
 
     def with_images(blocks: list[dict] | None, new: dict[str, tuple]) -> tuple[list[dict] | None, str | None]:
@@ -133,6 +142,12 @@ def _export(
             return None, None
         out = []
         for b in blocks:
+            if "sound" in b:
+                found = sound_file(Path(media_dir) / b["sound"])
+                if found.hash not in sounds and found.hash not in new:
+                    new[found.hash] = (found, None)
+                out.append({"sound": found.hash, "beside_previous": b["beside_previous"]})
+                continue
             if "image" not in b:
                 out.append(b)
                 continue
@@ -152,7 +167,7 @@ def _export(
         front_blocks = back_blocks = None
         new: dict[str, tuple] = {}
         if format_2:
-            front, back, front_blocks, back_blocks, reason = card_sides_v2(card, media_dir)
+            front, back, front_blocks, back_blocks, reason = card_sides_v2(card, media_dir, sounds=format_3)
             if not reason:
                 front_blocks, reason = with_images(front_blocks, new)
             if not reason:
@@ -167,6 +182,11 @@ def _export(
             log(state_dir, "skip", card=card.id, reason=reason)
             return
         for h, (prepared, alt) in new.items():
+            if hasattr(prepared, "source"):  # a sound file
+                sounds[h] = prepared.entry()
+                sound_files[prepared.file_name] = prepared.source
+                image_bytes += prepared.bytes
+                continue
             entry_image = {
                 "hash": h, "width": prepared.width, "height": prepared.height,
                 "file_width": prepared.file_width, "file_height": prepared.file_height,
@@ -213,8 +233,11 @@ def _export(
 
     batch_id = str(uuid.uuid4())
     uses_format_2 = any("front_blocks" in c or "back_blocks" in c for c in cards)
-    # The image files first: the helper sends a batch only once every file it names is there.
+    uses_format_3 = bool(sounds)
+    version = BATCH_FORMAT_VERSION_3 if uses_format_3 else BATCH_FORMAT_VERSION_2 if uses_format_2 else BATCH_FORMAT_VERSION
+    # The media files first: the helper sends a batch only once every file it names is there.
     _write_images(exchange_dir, image_files if uses_format_2 else {})
+    _write_files(exchange_dir / SOUNDS_DIR, sound_files)
     write_json(
         batch_record_path(state_dir, batch_id),
         {
@@ -228,11 +251,12 @@ def _export(
     write_json(
         exchange_dir / BATCH_NAME,
         {
-            "format_version": BATCH_FORMAT_VERSION_2 if uses_format_2 else BATCH_FORMAT_VERSION,
+            "format_version": version,
             "batch_id": batch_id,
             "exported_at_ms": now_ms,
             "deck_name": deck["name"],
             **({"images": list(images.values())} if uses_format_2 else {}),
+            **({"sounds": list(sounds.values())} if uses_format_3 else {}),
             "deck_id": deck_id,
             **_decks(col, state_dir),
             "cards": cards,
@@ -262,7 +286,11 @@ def _export(
 
 def _write_images(exchange_dir: Path, files: dict[str, Path]) -> None:
     """The batch's prepared images in `images/`, by hash; any other file there is removed."""
-    folder = exchange_dir / IMAGES_DIR
+    _write_files(exchange_dir / IMAGES_DIR, files)
+
+
+def _write_files(folder: Path, files: dict[str, Path]) -> None:
+    """`files` in `folder`, by name; any other file there is removed."""
     if not files and not folder.exists():
         return
     folder.mkdir(parents=True, exist_ok=True)
