@@ -5,7 +5,7 @@ import json
 import pytest
 
 from sukima.export import export_batch
-from sukima.text import MAX_SIDE_CHARS, REASONS, convert
+from sukima.text import MAX_SIDE_CHARS, REASONS, convert, note_type_hides
 
 
 def read(path):
@@ -357,3 +357,56 @@ def test_image_occlusion_is_known_by_its_note_type_alone(col, deck):
     assert card_sides(OcclusionCard())[2] == "image_occlusion"
     real = col.models.by_name("Image Occlusion")
     assert real["originalStockKind"] == 6
+
+
+# A hiding rule that can only hide an image the card doesn't have (DEC-184; extended by the
+# owner on 2026-11-17 for Ultimate Geography v5.3, whose only hiding rules are these two).
+GEOGRAPHY_CSS = """
+.value--front > img[src*="-blur"] + img { display: none }
+.value--back > img[src*="-blur"] { display: none }
+"""
+
+
+@pytest.mark.parametrize(
+    "html, hides",
+    [
+        ("Germany<br>Berlin", False),  # a capital card: no image at all (DEC-184)
+        ('<div class="value--front"><img src="ug-map-england.png"></div>', False),  # no blurred variant
+        ('<div class="value--back"><img src="ug-flag-uk.svg"></div>', False),
+        ('<div class="value--front"><img src="ug-map-x-blur.png"><img src="ug-map-x.png"></div>', True),
+        ("<img src='UG-MAP-X-BLUR.PNG'>", False),  # *= is case-sensitive without the i flag
+    ],
+)
+def test_geography_hiding_rules_skip_only_cards_with_a_blurred_image(html, hides):
+    assert note_type_hides(GEOGRAPHY_CSS, html) is hides
+
+
+@pytest.mark.parametrize(
+    "css, html",
+    [
+        (".hint { display: none }", "plain"),  # hides something that is not an image
+        ("img { display: none }", "<img src='a.png'>"),  # hides an image the card has
+        (".x img { display: none }", "<img src='a.png'>"),
+        ("img.blur { display: none }", "plain"),  # a class on the image: not read, so skipped
+        ("img::after { display: none }", "plain"),
+        ('img[src*="-blur"], .hint { display: none }', "plain"),  # one selector of the list hides text
+        ('@media (max-width: 1px) { img[src*="-blur"] { display: none } }', "plain"),
+        ('img[src*="-blur"] { display: none } @import url("x.css");', "plain"),
+        ('img[alt~="x"] { display: none }', "plain"),  # an operator not read here
+    ],
+)
+def test_other_hiding_rules_still_skip(css, html):
+    assert note_type_hides(css, html) is True
+
+
+def test_a_rule_on_a_missing_image_with_a_hiding_rule_elsewhere_still_skips():
+    assert note_type_hides(GEOGRAPHY_CSS + ".answer { visibility: hidden }", "plain") is True
+
+
+def test_a_geography_card_with_a_map_is_exported(col, deck, exchange, state):
+    model = copy_of_basic(col, "Ultimate Geography", css=GEOGRAPHY_CSS)
+    deck.review("Germany", "Berlin", model=model)
+    deck.review("<img src='ug-map-x-blur.png'><img src='ug-map-x.png'>", "Somewhere", model=model)
+    result = export_batch(col, deck.id, exchange, state)
+    assert result.exported == 1  # the capital card, no longer skipped for the image rules
+    assert sum(result.skipped.values()) == 1  # the card with a blurred variant stays in Anki

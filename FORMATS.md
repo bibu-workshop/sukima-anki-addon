@@ -87,6 +87,77 @@ A card that is not watch-ready is skipped: left out of the batch, untouched, and
 | `empty_side` | A front or back with no visible text |
 | `render_error` | Anki could not render it |
 
+## Batch: `batch.json`, format version 2
+
+Format 2 adds cards with images, lists, superscript, subscript and link text (image cards spec, `apps/.scratch/image-cards/spec.md`; DEC-175, DEC-180, DEC-187). It is format 1 with the fields below; everything not named here is as in format 1. An add-on writes format 2 only when the helper's cycle request says it passes format 2 on (`batch_formats`) and the batch has a card that needs it; format 1 otherwise, where all of these skip the card as before. A watch that reads only format 1 never gets format 2: the helper turns it back into format 1 first (image cards dropped and counted in `not_shown_by_day`, the image table removed).
+
+Each prepared image is a file in the folder `images/` beside `batch.json`, named by its hash and its type: `images/<hash>.jpg` or `images/<hash>.png`. The add-on writes the image files before `batch.json`; the helper sends a batch only when every file it names is there and its SHA-256 matches.
+
+Batch, added:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `format_version` | number | 2 |
+| `images` | list | Each distinct image the cards name, once, even when it is on both sides of a card or on several cards |
+
+Each image:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `hash` | text | SHA-256 of the prepared file, in lowercase hex |
+| `width`, `height` | number | The original's size in pixels. The watch shows 1 pixel as 1 point and never enlarges |
+| `file_width`, `file_height` | number | The prepared file's size in pixels: `max(416 / width, 496 / height)` times the original, never larger than it |
+| `transparent` | true or false | Whether the original has any transparent pixel (a rasterised SVG included). A transparent image is a PNG; any other is JPEG at quality 70 |
+| `description` | text, optional | The image's `alt` text, when it has one that is not a file name |
+| `bytes` | number | The prepared file's size in bytes |
+
+Card, added:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `front_blocks`, `back_blocks` | list, optional | Present for a side with an image, a list, superscript, subscript or a link: the side in the card's own order, as blocks. `front` and `back` still hold the side's text alone (list items on their own lines with their markers), which may then be empty. A card with either is a format 2 card: a watch that reads only format 1 does not get it |
+
+Each block is one of:
+
+| Block | Fields | Meaning |
+|---|---|---|
+| Text | `text`: list of runs | A stretch of the side's text, as in format 1 |
+| Image | `image`: text, `beside_previous`: true or false | An image of the batch's `images`, by its hash. `beside_previous`: it follows the previous image with nothing between, so the watch sets the two in one row |
+| List item | `list_item`: list of runs, `level`: 1 or 2, `marker`: text | One item of a list: `•` (`◦` at level 2) or its number with a full stop, `3.`. A third level skips the card (`other_markup`) |
+
+Runs in format 2 may also carry the styles `superscript` and `subscript`. Link text is plain text.
+
+New skip reasons in format 2: `image_missing`, an image whose file is not in Anki's media folder, reported just after `image`; `batch_full`, a card whose new images would take the batch's prepared images past 8 MB (distinct images counted once), reported last. Both count in `not_shown_by_day`. An image Qt can't read skips its card as `image`.
+
+## Batch: `batch.json`, format version 3
+
+Format 2 with sounds (sound cards spec). Written only when the helper's last cycle request listed 3 in `batch_formats`; otherwise a card with a sound stays in Anki as `audio`, as before. A batch with no sound card is written as format 2 or 1. A watch that doesn't read 3 never gets it: the helper turns it into format 2 (sound cards dropped and counted in `not_shown_by_day`, `sounds` removed), and into format 1 as before.
+
+Batch, added:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `format_version` | number | 3 |
+| `sounds` | list | Each distinct sound file the cards name, once, even when it is on both sides of a card or on several cards |
+
+Each sound:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `hash` | text | SHA-256 of the file, in lowercase hex. The file is Anki's own, unchanged, in `sounds/<hash>.<type>` |
+| `type` | text | Its extension, lower case: `mp3`, `m4a`, `aac`, `wav`, `caf` or `aiff` |
+| `bytes` | number | The file's size in bytes, at most 1,000,000 |
+
+A new block:
+
+| Block | Fields | Meaning |
+|---|---|---|
+| Sound | `sound`: text, `beside_previous`: true or false | A sound of the batch's `sounds`, by its hash, where Anki had the `[sound:…]` tag. `beside_previous`: it follows the previous sound with nothing between, so the watch sets the two side by side |
+
+A side whose only content is sound has blocks and empty `front`/`back` text; it is not `empty_side`. The back holds only what follows Anki's answer divider, so a front sound repeated by `{{FrontSide}}` is not on it; a sound file on both sides has one hash, and the watch shows it once.
+
+Images and sounds share the 8 MB cap: `batch_full` counts both, distinct files once. New skip reason in format 3: `sound_missing`, a sound whose file is not in Anki's media folder, reported just after `audio`. Still `audio`: text to speech (`{{tts}}`), an HTML `<audio>` element, a type not listed above (`.ogg`, `.opus`, `.flac`…), a file over 1 MB. Still `video`: a video file.
+
 ## Status: `status.json`, format version 1
 
 Written by the add-on. Read by the helper.
@@ -147,6 +218,7 @@ Written by the helper to start a desktop cycle. Read by the add-on, which looks 
 | `request_id` | text | New for each request. Letters, digits and hyphens, at most 64. |
 | `requested_at_ms` | number | When the user chose Sync |
 | `scheduled` | true or false, optional | True when the helper's schedule asked for the cycle. The add-on then takes the request up only once Anki is quiet: not on the review screen, no dialog or window open besides the main one, and not used for a minute (DEC-156). Absent or false: a manual sync, taken up at once. Asking again for the same `request_id` with `false` ends the wait. |
+| `batch_formats` | list of numbers, optional | The batch formats the helper can pass on to the watch. With 2 in it the add-on may write format 2; with 2 and 3, format 3. Absent from helpers before image cards: format 1 |
 | `deck_id` | number, optional | A deck picked on the watch (design guide 1.18). Just before the cycle's export, the add-on makes it the chosen deck, as the dialog would, so the cycle exports it. A deck that can't go to the watch (deleted or filtered) changes nothing. Absent: the chosen deck stays. Read by add-ons from 0.7.0 |
 
 A request is run once per Anki profile. A cycle cut short, by Anki quitting for example, is run again when the add-on next sees the request.
@@ -172,6 +244,7 @@ Each review event, as the watch recorded it:
 | `answered_at_ms` | number | The moment of the rating |
 | `time_taken_ms` | number | From the card appearing to the rating. Not negative. |
 | `batch_id` | text | The batch the card came from |
+| `batch_formats` | list of numbers, optional | The batch formats the watch that wrote the event reads, for the helper's format gate. Absent from watches before image cards. The add-on ignores it |
 
 ```json
 {

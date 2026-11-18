@@ -14,6 +14,7 @@ from typing import Protocol
 
 from anki.collection import Collection
 
+from .images import remember_helper_formats
 from .export import export_batch
 from .files import read_json, write_json
 from .log import log
@@ -398,6 +399,8 @@ class DesktopCycle:
             return
         if not isinstance(request, dict) or request.get("request_id") != self.request_id:
             return
+        # Which batch formats the helper passes on (image cards): kept for every export.
+        remember_helper_formats(self.state_dir, request.get("batch_formats"))
         deck_id = request.get("deck_id")
         if deck_id is None:
             return
