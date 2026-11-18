@@ -185,3 +185,21 @@ def test_the_media_folder_is_only_read_with_sounds(col, deck, sound_card, exchan
     before = {n: os.path.getmtime(os.path.join(folder, n)) for n in os.listdir(folder)}
     export_batch(col, deck.id, exchange, state)
     assert {n: os.path.getmtime(os.path.join(folder, n)) for n in os.listdir(folder)} == before
+
+
+# Padding and margin (the owner, 2026-11-18: Kaishi 1.5k)
+
+
+@pytest.mark.parametrize(
+    "style, reason",
+    [
+        ("font-size: 25px; padding-bottom: 20px", None),
+        ("margin: 0 auto; padding: 4px 8px", None),
+        ("margin-left: -9999px", "hidden_content"),  # caught by the hiding check first
+        ("margin-top: -2em", "other_markup"),
+        ("width: 40vw", "other_markup"),
+    ],
+)
+def test_padding_and_margin_are_ignored_unless_negative(col, deck, style, reason):
+    card = deck.review(f"<div style='{style}'>palabra</div>", "word")
+    assert sides(col, card)[-1] == reason

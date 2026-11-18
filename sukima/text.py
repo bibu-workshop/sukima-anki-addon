@@ -84,6 +84,11 @@ _SAFE_PROPERTIES = {
     "color", "background", "background-color", "font-family", "font-size", "font-style",
     "font-weight", "line-height", "text-align", "text-decoration", "text-decoration-line",
 }
+# Spacing the watch ignores (2026-11-18, the owner: Kaishi 1.5k wraps every card in padded
+# divs). A negative margin can move text off-screen, so it still skips the card.
+_SPACING_PROPERTIES = {
+    f"{kind}{side}" for kind in ("padding", "margin") for side in ("", "-top", "-bottom", "-left", "-right")
+}
 _ZERO_WIDTH = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
 _MATHS = re.compile(r"\\\(|\\\[|\[latex\]|\[\$\$?\]", re.I)
 _TYPE_IN = re.compile(r"\[\[type:", re.I)
@@ -229,7 +234,10 @@ def _inline_style_reasons(style: str) -> set[str]:
     if hides_content(style):
         reasons.add(HIDDEN_CONTENT)
     for declaration in style.split(";"):
-        name = declaration.split(":")[0].strip().lower()
+        name, _, value = declaration.partition(":")
+        name = name.strip().lower()
+        if name in _SPACING_PROPERTIES and "-" not in value:
+            continue
         if name and name not in _SAFE_PROPERTIES:
             reasons.add(OTHER_MARKUP)
     return reasons
