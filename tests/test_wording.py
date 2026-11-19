@@ -14,7 +14,7 @@ def test_menu_item_and_dialog_words_are_the_guides():
 
 def test_the_watch_sentence_waits_for_the_release_that_ships_it():
     assert wording.one_deck_paragraph(False) == (
-        "One deck goes to the watch at a time. Choosing a sub-deck sends only that sub-deck. "
+        "One deck goes to the watch at a time. A deck with sub-decks sends them too, as studying it in Anki does. "
         "The change takes effect at once."
     )
     assert wording.one_deck_paragraph(True).endswith("The change takes effect at once. You can also change it on your watch.")
