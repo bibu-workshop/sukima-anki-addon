@@ -158,6 +158,19 @@ A side whose only content is sound has blocks and empty `front`/`back` text; it 
 
 Images and sounds share the 8 MB cap: `batch_full` counts both, distinct files once. New skip reason in format 3: `sound_missing`, a sound whose file is not in Anki's media folder, reported just after `audio`. Still `audio`: text to speech (`{{tts}}`), an HTML `<audio>` element, a type not listed above (`.ogg`, `.opus`, `.flac`…), a file over 1 MB. Still `video`: a video file.
 
+## Batch: `batch.json`, format version 4
+
+Format 3 with code (card content spec, design guide 1.26). Written only when the helper's last cycle request listed 4 in `batch_formats`; otherwise a card with code stays in Anki as before (`other_markup`). A batch with no code is written as format 3 or lower. A watch that doesn't read 4 never gets it: the helper turns it into format 3 (code cards dropped and counted in `not_shown_by_day`), and lower as before.
+
+A new block, and a new run style:
+
+| Block or style | Fields | Meaning |
+|---|---|---|
+| Code | `code`: text | A code block (`<pre>`, or Anki's syntax highlighter with or without line numbers), its text exactly as written: every space, tab and line break kept, line numbers, colours and tags dropped, a final line break dropped |
+| `code` (run style) | — | Inline code (`<code>` in a sentence), shown in a monospace face |
+
+Also in format 4: `<center>` is a plain block of text and `<small>` plain text, and the maths check reads only what lies outside code and scripts, so a `\(` inside code no longer keeps a card in Anki. A code block's text counts towards the side's length limit (`too_long`).
+
 ## Status: `status.json`, format version 1
 
 Written by the add-on. Read by the helper.
