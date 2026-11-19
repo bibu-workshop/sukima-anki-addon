@@ -12,6 +12,9 @@ A side becomes a list of blocks in the card's own order:
   {"list_item": [runs], "level": 1 or 2, "marker": "•", "◦" or "3."}
   {"sound": <media file name>, "beside_previous": bool}   (format 3 only)
   {"code": text, exactly as written}                       (format 4 only)
+  {"maths": <mask hash>, "tex": TeX}                         (format 5 only: display maths)
+Format 5 also puts inline maths in a text block as a run: {"text": TeX, "styles": ["maths"],
+"maths": <mask hash>}; and a table drawn as a picture is an image block (`maths.py`).
 The export later replaces each image's file name with the prepared file's hash
 (`images.py`) and each sound's with its file's hash (`sounds.py`). `front` and `back`
 keep the side's text alone.
@@ -25,8 +28,10 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass, replace
 from urllib.parse import unquote
 
+from . import maths as m
 from . import text as t
 
 SUPERSCRIPT, SUBSCRIPT = "superscript", "subscript"
@@ -87,9 +92,17 @@ _NUMBERED = {"1", "a", "A", "i", "I"}
 class _BlockConverter(t._Converter):
     """The format 1 converter, taught images, lists, superscript, subscript and links."""
 
-    def __init__(self, media_dir: str, av_tags: dict | None = None, code: list[str] | None = None) -> None:
+    def __init__(
+        self, media_dir: str, av_tags: dict | None = None, code: list[str] | None = None,
+        maths: "Maths | None" = None, formulas: list | None = None, tables: list | None = None,
+    ) -> None:
         super().__init__()
         self.media_dir = media_dir
+        # With format 5: the lookup for drawn formulas and tables, and the side's own, by index.
+        self.maths = maths
+        self.formulas = formulas or []
+        self.tables = tables or []
+        self.inline_maths: dict[str, tuple[str, str]] = {}  # placeholder style -> (TeX, mask hash)
         # With format 4: the side's code blocks' texts, by placeholder index; None writes no code.
         self.code = code
         # With format 3: Anki's sound tags of each side, by "q" and "a"; None writes no sounds.
@@ -142,6 +155,12 @@ class _BlockConverter(t._Converter):
             self.blocks.append({"code": self.code[index] if index < len(self.code) else ""})
             self.broke = True
             self.uses_format_2 = True
+            return
+        if tag == m.MATHS_ELEMENT and self.maths is not None:
+            self._formula(int(a.get("data-index") or 0))
+            return
+        if tag == m.TABLE_ELEMENT and self.maths is not None:
+            self._table(int(a.get("data-index") or 0))
             return
         if tag == "code" and self.code is not None:
             self.uses_format_2 = True
@@ -254,27 +273,87 @@ class _BlockConverter(t._Converter):
         self.broke = False
         self.uses_format_2 = True
 
+    def _formula(self, index: int) -> None:
+        """Display maths a block of its own; inline maths a run in its sentence. A formula not
+        drawn keeps the card in Anki as `maths`."""
+        if index >= len(self.formulas) or not self.formulas[index].tex:
+            return  # an empty pair draws nothing in Anki either
+        formula = replace(self.formulas[index], macros=self.maths.macros)
+        drawn = self.maths.lookup(formula)
+        if drawn is None:
+            self.reasons.add(t.MATHS)
+            return
+        self.uses_format_2 = True
+        if formula.display and self.item is None:
+            self._flush()
+            self.blocks.append({"maths": drawn.hash, "tex": formula.tex, "_drawn": drawn})
+            self.broke = True
+            return
+        # A placeholder style keeps the formula one run, apart from any formula beside it.
+        style = f"\x00maths{len(self.inline_maths)}"
+        self.inline_maths[style] = (formula.tex, drawn)
+        self.styles.append(style)
+        self._emit(formula.tex)
+        self.styles.remove(style)
+
+    def _table(self, index: int) -> None:
+        """A table drawn as a picture, as an image block. One not drawn keeps the card in Anki."""
+        drawn = self.maths.lookup(self.tables[index]) if index < len(self.tables) else None
+        if drawn is None:
+            self.reasons.add(t.TABLE)
+            return
+        self._flush()
+        self.blocks.append({"image": drawn.hash, "beside_previous": False, "alt": None, "_drawn": drawn})
+        self.since_image = False
+        self.broke = True
+        self.uses_format_2 = True
+
+    def runs(self) -> list[dict]:
+        """Format 1's runs, with each inline formula as its own run holding its TeX and mask."""
+        out = []
+        for run in super().runs():
+            placeholder = next((s for s in run["styles"] if s in self.inline_maths), None)
+            if placeholder is None:
+                out.append(run)
+                continue
+            tex, drawn = self.inline_maths[placeholder]
+            out.append({"text": tex, "styles": ["maths"], "maths": drawn.hash, "_drawn": drawn})
+        return out
+
     def side(self) -> list[dict]:
         self._flush()
         self._end_item()
         return self.blocks
 
 
+@dataclass(frozen=True)
+class Maths:
+    """Format 5: how a side's formulas and tables are looked up, and the card's macros."""
+
+    lookup: "m.MathsLookup"
+    macros: str = "{}"
+
+
 def convert_blocks(
-    html: str, media_dir: str, av_tags: dict | None = None, code: bool = False
+    html: str, media_dir: str, av_tags: dict | None = None, code: bool = False, maths: Maths | None = None,
 ) -> tuple[list[dict], list[dict] | None, set[str]]:
     """A rendered side as format 1 runs (its text alone), format 2 blocks (None when the side
     needs nothing format 2 adds), and every reason it is not watch-ready. With `av_tags`
     (format 3), each of Anki's sound markers becomes a sound block instead of a reason. With
     `code` (format 4), code becomes code blocks and the run style "code", `<center>` is a plain
-    block, and the maths check reads only what lies outside code and scripts."""
+    block, and the maths check reads only what lies outside code and scripts. With `maths`
+    (format 5), formulas and tables Anki's MathJax has drawn take their place."""
     texts = None
+    formulas = tables = None
     if code:
         html, texts = _take_code(html)
         html = re.sub(r"<(/?)center\b", r"<\1div", html, flags=re.I)
         # <small> only makes text smaller (Coding Flashcards' label "Rust Flashcards"): plain text.
         html = re.sub(r"<(/?)small\b", r"<\1span", html, flags=re.I)
-    parser = _BlockConverter(media_dir, av_tags, texts)
+    if maths is not None:
+        html, tables = m.take_tables(html)
+        html, formulas = m.take_maths(html)
+    parser = _BlockConverter(media_dir, av_tags, texts, maths, formulas, tables)
     reasons = parser.reasons
     looked_at = re.sub(r"<code\b.*?</code>", "", _SCRIPT_ELEMENT.sub("", html), flags=re.S | re.I) if code else html
     if t._MATHS.search(looked_at):
@@ -293,7 +372,7 @@ def convert_blocks(
     length = sum(len(r["text"]) for r in runs) + sum(len(b["code"]) for b in blocks if "code" in b)
     if length > t.MAX_SIDE_CHARS:
         reasons.add(t.TOO_LONG)
-    has_image = any("image" in b or "sound" in b or b.get("code", "").strip() for b in blocks)
+    has_image = any("image" in b or "sound" in b or "maths" in b or b.get("code", "").strip() for b in blocks)
     if not has_image and not t._ZERO_WIDTH.sub("", "".join(r["text"] for r in runs)).strip():
         reasons.add(t.EMPTY_SIDE)
     return runs, (blocks if parser.uses_format_2 else None), reasons
@@ -303,9 +382,11 @@ def _text_alone(blocks: list[dict]) -> list[dict]:
     """The side's text in order, list items on their own lines with their markers."""
     runs: list[dict] = []
     for b in blocks:
-        if "image" in b or "sound" in b or "code" in b:
+        if "image" in b or "sound" in b or "code" in b or "maths" in b:
             continue
         piece = b.get("text") or ([{"text": b["marker"] + " ", "styles": []}] + b["list_item"])
+        # Text alone: an inline formula is its TeX, unmarked.
+        piece = [{"text": r["text"], "styles": [s for s in r["styles"] if s != "maths"]} for r in piece]
         if runs:
             runs.append({"text": "\n", "styles": []})
         runs.extend(piece)
@@ -318,10 +399,12 @@ def _text_alone(blocks: list[dict]) -> list[dict]:
     return merged
 
 
-def card_sides_v2(card, media_dir: str, sounds: bool = False, code: bool = False):
+def card_sides_v2(card, media_dir: str, sounds: bool = False, code: bool = False, maths: "m.MathsLookup | None" = None):
     """A card's front and back for format 2: (front runs, back runs, front blocks or None,
     back blocks or None, the reason to skip it or None). With `sounds` (format 3), Anki's
-    sound tags become sound blocks; otherwise any sound keeps the card in Anki."""
+    sound tags become sound blocks; otherwise any sound keeps the card in Anki. With `maths`
+    (format 5, with `code`), formulas and tables come drawn from it, and a script that only
+    sets MathJax's macros is read instead of keeping the card in Anki."""
     reasons: set[str] = set()
     try:
         note_type = card.note_type()
@@ -330,6 +413,10 @@ def card_sides_v2(card, media_dir: str, sounds: bool = False, code: bool = False
         av_tags = list(rendered.question_av_tags) + list(rendered.answer_av_tags)
     except Exception:
         return [], [], None, None, t.RENDER_ERROR
+    side_maths = None
+    if maths is not None and code:
+        question, answer, macros = m.take_macro_scripts(question, answer)
+        side_maths = Maths(maths, m.macros_json(macros))
     field_names = {f.get("name") for f in note_type.get("flds", [])}
     if note_type.get("originalStockKind") == t._STOCK_KIND_IMAGE_OCCLUSION or _IO_ENHANCED_FIELDS <= field_names:
         reasons.add(t.IMAGE_OCCLUSION)
@@ -342,10 +429,10 @@ def card_sides_v2(card, media_dir: str, sounds: bool = False, code: bool = False
         for tag in av_tags:
             is_video = isinstance(tag, t.SoundOrVideoTag) and t._VIDEO_FILE.search(tag.filename)
             reasons.add(t.VIDEO if is_video else t.AUDIO)
-    front, front_blocks, front_reasons = convert_blocks(question, media_dir, tags, code)
-    back, back_blocks, back_reasons = convert_blocks(t.back_only(answer), media_dir, tags, code)
+    front, front_blocks, front_reasons = convert_blocks(question, media_dir, tags, code, side_maths)
+    back, back_blocks, back_reasons = convert_blocks(t.back_only(answer), media_dir, tags, code, side_maths)
     # What comes before the answer divider can still hide or script what follows.
-    whole_answer_reasons = convert_blocks(answer, media_dir, tags, code)[2] - {t.TOO_LONG, t.EMPTY_SIDE}
+    whole_answer_reasons = convert_blocks(answer, media_dir, tags, code, side_maths)[2] - {t.TOO_LONG, t.EMPTY_SIDE}
     reasons |= front_reasons | back_reasons | whole_answer_reasons
     reason = next((r for r in REASONS if r in reasons), None)
     return front, back, front_blocks, back_blocks, reason

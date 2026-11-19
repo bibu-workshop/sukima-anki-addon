@@ -171,6 +171,35 @@ A new block, and a new run style:
 
 Also in format 4: `<center>` is a plain block of text and `<small>` plain text, and the maths check reads only what lies outside code and scripts, so a `\(` inside code no longer keeps a card in Anki. A code block's text counts towards the side's length limit (`too_long`).
 
+## Batch: `batch.json`, format version 5
+
+Format 4 with maths (card content spec, ticket 06; design guide 1.26, "Maths and tables"). Written only when the helper's last cycle request listed 5 in `batch_formats` and the add-on found Anki's own MathJax; otherwise a card with maths stays in Anki as `maths`, as before. A batch with no maths is written as format 4 or lower. A watch that doesn't read 5 never gets it: the helper turns it into format 4 (maths cards dropped and counted in `not_shown_by_day`, the masks only they name removed from `images`), and lower as before.
+
+Before the export, Anki's MathJax draws each formula the cards hold in a hidden web view, inside Anki, with no network request. Each is drawn black on white at 18 pt and 2 pixels per point, trimmed to its ink, and turned into a **mask**: a PNG whose alpha is the drawing (255 less the luminance) and whose colour is black. The watch draws it in its own text colour. Drawn formulas are kept in the add-on's state folder by their TeX, display or inline, the card's macros and the MathJax file, so each is drawn once.
+
+A formula MathJax can't read (an unknown macro, a TeX error) keeps its card in Anki as `maths`, and so does one not drawn in 5 seconds or not reached in a pass, which stops after 60 seconds. The last two are tried again at the next export.
+
+A block and a run style:
+
+| Block or run | Fields | Meaning |
+|---|---|---|
+| Maths (block) | `maths`: text, `tex`: text | Display maths (`\[...\]`): a mask of the batch's `images`, by its hash, as a block of its own; `tex` its TeX, for where it is shown as text (the helper's card lines) |
+| Maths (run) | `text`: the TeX, `styles`: `["maths"]`, `maths`: text | Inline maths (`\(...\)`) in its sentence: a run in a text or list item block, its `maths` the mask's hash. Two formulas side by side are two runs. `front` and `back` (the text alone) hold the TeX as plain text |
+
+Each mask is an entry of `images` like any image (`images/<hash>.png`, `transparent` true), with:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `mask` | true | A mask, drawn in the text colour |
+| `depth` | number | Inline maths: how far the formula reaches below the text's baseline, in points at 18 pt. 0 for display maths |
+| `ex` | number | The height of an x in the formula's font, in points at 18 pt: the watch scales the mask by its own font's x-height over this |
+
+`width` and `height` are the mask's size in points at 18 pt (its pixels over 2); `file_width` and `file_height` its pixels.
+
+**A script that only sets MathJax's macros** (`MathJax.config.tex.macros = {...};`, then optionally `MathJax.startup.getComponents();`, as some shared maths decks have on every card) is read, and its macros go with the card's formulas, instead of keeping the card in Anki as `script`. Any other script still does.
+
+**Tables.** With format 5 passed on, a real table (not code) that holds only text and formatting is drawn as a picture in its own colours, at most 190 points wide, and goes as an ordinary image block (format 2): a PNG, `transparent` false. A table holding a picture, sound, maths, a script, a form field, another table or hidden content stays in Anki as `table`. A batch whose only new content is such a table is format 2.
+
 ## Status: `status.json`, format version 1
 
 Written by the add-on. Read by the helper.

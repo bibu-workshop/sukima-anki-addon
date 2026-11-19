@@ -18,6 +18,7 @@ from .images import remember_helper_formats
 from .export import export_batch
 from .files import read_json, write_json
 from .log import log
+from .maths import MathsCache
 from .replay import hold_all, pending_events, replay
 from .settings import choose_deck, chosen_deck_id, watch_decks
 from .status import update_status
@@ -49,11 +50,14 @@ BACKUP_FAILED = "backup_failed"
 # recently, counts as this cycle's sync in: the one Anki runs on opening.
 RECENT_SYNC_MS = 60_000
 SYNC_TIMEOUT_MS = 5 * 60_000
+# The render pass ends itself after PASS_LIMIT_MS (`maths.py`); past this the export goes on anyway.
+RENDER_TIMEOUT_MS = 90_000
 
 _IDLE = "idle"
 _WANTS_SYNC_IN = "wants_sync_in"  # waiting to be able to ask Anki for the sync in
 _SYNCING_IN = "syncing_in"
 _WANTS_TO_WORK = "wants_to_work"  # synced in; waiting for the user to leave the review screen
+_RENDERING = "rendering"  # replayed; Anki's MathJax draws the batch's maths before the export
 _WANTS_SYNC_OUT = "wants_sync_out"
 _SYNCING_OUT = "syncing_out"
 
@@ -87,6 +91,12 @@ class Host(Protocol):
         """Ask Anki for a backup and wait for it. False if it did not complete."""
     def refresh(self) -> None:
         """Have Anki's window show the collection as it now is: counts, and Undo."""
+    def maths_cache(self, state_dir: Path) -> MathsCache | None:
+        """Where drawn maths is kept, for the MathJax in this Anki; None when there is none."""
+    def start_render(self, jobs: list, cache: MathsCache) -> bool:
+        """Start drawing `jobs` into `cache`, without waiting. False if it can't start."""
+    def render_done(self) -> bool:
+        """Whether the render pass started last has ended."""
 
 
 def profile_opened(col: Collection, exchange_dir: Path, state_dir: Path) -> None:
@@ -129,6 +139,7 @@ class DesktopCycle:
         # What the status file says the add-on waits for (DEC-156), and what this poll found.
         self.waiting_for: str | None = None
         self._waiting_now: str | None = None
+        self.render_over = False
 
     # -- what moves the cycle on -------------------------------------------
 
@@ -173,6 +184,8 @@ class DesktopCycle:
             self._sync_in(col)
         elif self.state == _WANTS_TO_WORK:
             self._work(col)
+        elif self.state == _RENDERING:
+            self._rendering(col)
         elif self.state == _WANTS_SYNC_OUT:
             self._sync_out()
         elif self.state in (_SYNCING_IN, _SYNCING_OUT):
@@ -219,7 +232,10 @@ class DesktopCycle:
         self.noted = None
 
     def _waited_too_long(self) -> bool:
-        return self.host.now_ms() - self.waiting_since > SYNC_TIMEOUT_MS
+        return self._waited(SYNC_TIMEOUT_MS)
+
+    def _waited(self, ms: int) -> bool:
+        return self.host.now_ms() - self.waiting_since > ms
 
     def _report_waiting(self) -> None:
         """Tells the helper what the add-on waits for, in the status file, when it changes:
@@ -317,7 +333,44 @@ class DesktopCycle:
             )
         self.report.update(result.counts, held_because=held_because)
 
-        export = export_batch(col, deck_id, self.exchange_dir, self.state_dir, now_ms=host.now_ms())
+        # Maths not drawn yet is drawn first, while Anki stays free (card content spec, 06).
+        if self._start_rendering(col, deck_id):
+            return
+        self._export_and_sync_out(col)
+
+    def _start_rendering(self, col: Collection, deck_id: int | None) -> bool:
+        cache = self.host.maths_cache(self.state_dir)
+        if cache is None or deck_id is None:
+            return False
+        collected = export_batch(col, deck_id, self.exchange_dir, self.state_dir, maths=cache, collect=True)
+        if not collected.wanted or not self.host.start_render(collected.wanted, cache):
+            return False
+        self._log("render_start", count=len(collected.wanted))
+        self._wait(_RENDERING)
+        self.render_over = False
+        return True
+
+    def _rendering(self, col: Collection) -> None:
+        """Waits for the render pass; the export then waits for the review screen to close,
+        as replay does, since it briefly selects the deck."""
+        host = self.host
+        if not self.render_over:
+            if not host.render_done() and not self._waited(RENDER_TIMEOUT_MS):
+                return
+            self.render_over = True
+            self._log("render_end", finished=host.render_done())
+        if host.on_review_screen():
+            self._note_waiting("waiting_to_leave_review")
+            return
+        self._export_and_sync_out(col)
+
+    def _export_and_sync_out(self, col: Collection) -> None:
+        host = self.host
+        deck_id = chosen_deck_id(col, self.state_dir)
+        export = export_batch(
+            col, deck_id, self.exchange_dir, self.state_dir, now_ms=host.now_ms(),
+            maths=host.maths_cache(self.state_dir),
+        )
         self.report["export"] = export.outcome
         # So the deck list shows the new counts, and Undo offers the replayed answers.
         host.refresh()

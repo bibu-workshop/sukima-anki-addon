@@ -21,6 +21,7 @@ from .status import update_status
 from .blocks import card_sides_v2
 from .images import helper_reads_format_2, prepare
 from .images import helper_reads_format
+from .maths import Drawn, MathsCache, MathsLookup
 from .sounds import helper_reads_format_3, sound_file
 from .text import IMAGE, card_sides
 
@@ -32,6 +33,8 @@ BATCH_FORMAT_VERSION_2 = 2
 BATCH_FORMAT_VERSION_3 = 3
 # Format 4: code blocks (card content spec).
 BATCH_FORMAT_VERSION_4 = 4
+# Format 5: maths drawn by Anki's MathJax, as masks (card content spec; `maths.py`).
+BATCH_FORMAT_VERSION_5 = 5
 SOUNDS_DIR = "sounds"
 IMAGES_DIR = "images"
 # The prepared images of one batch together, at most (DEC-187 a); distinct images count once.
@@ -70,6 +73,8 @@ class ExportResult:
     # can't show them (the tooltip after choosing a deck, design guide 1.18).
     today_ready: int = 0
     today_not_shown: int = 0
+    # Collecting only (format 5): the formulas and tables to draw before the real export.
+    wanted: list = field(default_factory=list)
 
 
 def batch_record_path(state_dir: Path, batch_id: str) -> Path:
@@ -82,15 +87,27 @@ def export_batch(
     exchange_dir: Path,
     state_dir: Path,
     now_ms: int | None = None,
+    maths: MathsCache | None = None,
+    collect: bool = False,
 ) -> ExportResult:
     """Write the batch file, the status file and the add-on's own batch record.
 
     A card that cannot be converted is skipped, never an error. With no deck
     to export from, no batch is written and the status says why.
+
+    With `maths` (Anki's MathJax found) and a helper that passes on format 5, formulas and
+    tables come drawn from that cache; one not drawn keeps its card in Anki. With `collect`,
+    nothing is written: the result's `wanted` lists what isn't drawn yet, for the render pass.
     """
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    if collect:
+        try:
+            return _export(col, deck_id, exchange_dir, state_dir, now_ms, maths, collect=True)
+        except Exception as e:
+            log(state_dir, "collect_error", kind=type(e).__name__)
+            return ExportResult(FAILED)
     try:
-        return _export(col, deck_id, exchange_dir, state_dir, now_ms)
+        return _export(col, deck_id, exchange_dir, state_dir, now_ms, maths)
     except Exception as e:
         # The exception's text may quote a card, so only its kind is logged.
         return _failed(exchange_dir, state_dir, now_ms, e)
@@ -111,10 +128,13 @@ def _failed(exchange_dir: Path, state_dir: Path, now_ms: int, error: Exception) 
 
 
 def _export(
-    col: Collection, deck_id: int | None, exchange_dir: Path, state_dir: Path, now_ms: int
+    col: Collection, deck_id: int | None, exchange_dir: Path, state_dir: Path, now_ms: int,
+    maths_cache: MathsCache | None = None, collect: bool = False,
 ) -> ExportResult:
     day_end = _next_day_at_ms(col)
     deck = col.decks.get(deck_id, default=False) if deck_id else None
+    if collect and not deck:
+        return ExportResult(NO_DECK_CHOSEN)
     if not deck:
         outcome = DECK_MISSING if deck_id else NO_DECK_CHOSEN
         return _finish(exchange_dir, state_dir, now_ms, None, ExportResult(outcome, next_day_at_ms=day_end), [])
@@ -132,6 +152,11 @@ def _export(
     format_3 = format_2 and helper_reads_format_3(state_dir)
     # Format 4, code, likewise; a helper that passes on 4 passes on 2 and 3.
     format_4 = format_3 and helper_reads_format(state_dir, 4)
+    # Format 5, maths, likewise, and only with Anki's MathJax to draw it.
+    format_5 = format_4 and maths_cache is not None and helper_reads_format(state_dir, 5)
+    lookup = MathsLookup(maths_cache, collect=collect) if format_5 else None
+    if collect and lookup is None:
+        return ExportResult(OK)
     media_dir = col.media.dir()
     image_cache = state_dir / "images"
     images: dict[str, dict] = {}  # hash -> the batch's image entry
@@ -153,6 +178,24 @@ def _export(
                     new[found.hash] = (found, None)
                 out.append({"sound": found.hash, "beside_previous": b["beside_previous"]})
                 continue
+            if "_drawn" in b:  # a formula or a table, drawn (format 5)
+                drawn = b["_drawn"]
+                if drawn.hash not in images and drawn.hash not in new:
+                    new[drawn.hash] = (drawn, None)
+                out.append({k: v for k, v in b.items() if k not in ("_drawn", "alt")})
+                continue
+            if "text" in b or "list_item" in b:
+                key = "text" if "text" in b else "list_item"
+                runs = []
+                for r in b[key]:
+                    if "_drawn" in r:
+                        drawn = r["_drawn"]
+                        if drawn.hash not in images and drawn.hash not in new:
+                            new[drawn.hash] = (drawn, None)
+                        r = {k: v for k, v in r.items() if k != "_drawn"}
+                    runs.append(r)
+                out.append({**b, key: runs})
+                continue
             if "image" not in b:
                 out.append(b)
                 continue
@@ -172,7 +215,8 @@ def _export(
         front_blocks = back_blocks = None
         new: dict[str, tuple] = {}
         if format_2:
-            front, back, front_blocks, back_blocks, reason = card_sides_v2(card, media_dir, sounds=format_3, code=format_4)
+            front, back, front_blocks, back_blocks, reason = card_sides_v2(
+                card, media_dir, sounds=format_3, code=format_4, maths=lookup)
             if not reason:
                 front_blocks, reason = with_images(front_blocks, new)
             if not reason:
@@ -184,9 +228,15 @@ def _export(
         if reason:
             skipped[reason] = skipped.get(reason, 0) + 1
             not_shown[day] += 1
-            log(state_dir, "skip", card=card.id, reason=reason)
+            if not collect:
+                log(state_dir, "skip", card=card.id, reason=reason)
             return
         for h, (prepared, alt) in new.items():
+            if isinstance(prepared, Drawn):
+                images[h] = prepared.image_entry()
+                image_files[prepared.file_name] = maths_cache.path(prepared)
+                image_bytes += prepared.bytes
+                continue
             if hasattr(prepared, "source"):  # a sound file
                 sounds[h] = prepared.entry()
                 sound_files[prepared.file_name] = prepared.source
@@ -236,12 +286,17 @@ def _export(
                     continue
                 take(card, start, day)
 
+    if collect:
+        return ExportResult(OK, wanted=list(lookup.wanted.values()))
+
     batch_id = str(uuid.uuid4())
     uses_format_2 = any("front_blocks" in c or "back_blocks" in c for c in cards)
     uses_format_3 = bool(sounds)
     uses_format_4 = any(_uses_code(c) for c in cards)
+    uses_format_5 = any(_uses_maths(c) for c in cards)
     version = (
-        BATCH_FORMAT_VERSION_4 if uses_format_4
+        BATCH_FORMAT_VERSION_5 if uses_format_5
+        else BATCH_FORMAT_VERSION_4 if uses_format_4
         else BATCH_FORMAT_VERSION_3 if uses_format_3
         else BATCH_FORMAT_VERSION_2 if uses_format_2
         else BATCH_FORMAT_VERSION
@@ -302,6 +357,17 @@ def _uses_code(card: dict) -> bool:
             return True
         runs = b.get("text") or b.get("list_item") or []
         if any("code" in r["styles"] for r in runs):
+            return True
+    return False
+
+
+def _uses_maths(card: dict) -> bool:
+    """A format 5 card: display maths, or a run of inline maths. A table drawn as a picture is
+    an ordinary image block and needs no more than format 2."""
+    for b in (card.get("front_blocks") or []) + (card.get("back_blocks") or []):
+        if "maths" in b:
+            return True
+        if any("maths" in r for r in b.get("text") or b.get("list_item") or []):
             return True
     return False
 

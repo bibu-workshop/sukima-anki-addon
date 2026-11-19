@@ -36,6 +36,7 @@ from . import cycle as cycle_module
 from .cycle import DesktopCycle, parse_anki_version, profile_opened
 from .export import export_batch
 from .log import log
+from .maths import MathsCache, mathjax_dir, mathjax_id
 from .settings import EXCHANGE_DIR, choose_deck, chosen_deck_id, state_dir_for, watch_decks
 
 POLL_MS = 3000
@@ -57,15 +58,16 @@ def busy_reason(*, reviewing: bool, open_windows: list[str], last_used_ms: int, 
     return None
 
 
-def open_windows(main, top_level, modal) -> list[str]:
+def open_windows(main, top_level, modal, ignore=()) -> list[str]:
     """The kinds of window open besides Anki's main one: dialogs, the Browser,
-    Add, Edit, options, any modal. Tooltips, menus and the like do not count."""
+    Add, Edit, options, any modal. Tooltips, menus and the like do not count, nor
+    `ignore`: the render pass's hidden web view, which is never on screen."""
     passing = {Qt.WindowType.ToolTip, Qt.WindowType.Popup, Qt.WindowType.SplashScreen}
     names = []
     if modal is not None and modal is not main:
         names.append(type(modal).__name__)
     for widget in top_level:
-        if widget is main or widget is modal or not widget.isVisible():
+        if widget is main or widget is modal or not widget.isVisible() or any(widget is w for w in ignore):
             continue
         if widget.windowType() in passing:
             continue
@@ -86,6 +88,10 @@ class AnkiHost:
         self.detail = ""
         # Opening Anki counts as using it: a scheduled cycle never opens it (DEC-130).
         self.last_used_ms = self.now_ms()
+        # Maths (format 5): Anki's MathJax, and the render pass, made when first needed.
+        self.mathjax = mathjax_dir()
+        self.mathjax_name = mathjax_id(self.mathjax) if self.mathjax else None
+        self.renderer = None
 
     def note_use(self) -> None:
         """A key, click or scroll in one of Anki's windows."""
@@ -94,7 +100,10 @@ class AnkiHost:
     def anki_busy(self) -> str | None:
         return busy_reason(
             reviewing=self.on_review_screen(),
-            open_windows=open_windows(mw, QApplication.topLevelWidgets(), QApplication.activeModalWidget()),
+            open_windows=open_windows(
+                mw, QApplication.topLevelWidgets(), QApplication.activeModalWidget(),
+                ignore=[self.renderer.view] if self.renderer and self.renderer.view else [],
+            ),
             last_used_ms=self.last_used_ms,
             now_ms=self.now_ms(),
         )
@@ -209,6 +218,25 @@ class AnkiHost:
             return False
         return True
 
+    def maths_cache(self, state_dir: Path) -> MathsCache | None:
+        if self.mathjax_name is None:
+            return None
+        return MathsCache(state_dir / "maths", self.mathjax_name)
+
+    def start_render(self, jobs: list, cache: MathsCache, on_done=None) -> bool:
+        """Draws `jobs` with Anki's MathJax, from Qt callbacks; see `render.py`."""
+        if self.mathjax is None:
+            return False
+        if self.renderer is None:
+            from .render import MathsRenderer
+
+            state_dir = cache.folder.parent
+            self.renderer = MathsRenderer(self.mathjax, log=lambda what, **f: log(state_dir, what, **f))
+        return self.renderer.start(jobs, cache, on_done)
+
+    def render_done(self) -> bool:
+        return self.renderer is None or not self.renderer.busy
+
 
 class _AddOn:
     def __init__(self) -> None:
@@ -259,8 +287,18 @@ class _AddOn:
             return
         deck_id, name = decks[picked]
         choose_deck(mw.col, self.state_dir, deck_id)
-        result = export_batch(mw.col, deck_id, EXCHANGE_DIR, self.state_dir)
-        tooltip(wording.chosen_tooltip(name, result.today_ready, result.today_not_shown))
+        state_dir, cache = self.state_dir, self.host.maths_cache(self.state_dir)
+
+        def export_and_say() -> None:
+            if not (mw.col and self.state_dir == state_dir):
+                return  # the profile closed while maths was drawn
+            result = export_batch(mw.col, deck_id, EXCHANGE_DIR, state_dir, maths=cache)
+            tooltip(wording.chosen_tooltip(name, result.today_ready, result.today_not_shown))
+
+        # The deck's maths is drawn first, so the tooltip counts it as on the watch.
+        wanted = export_batch(mw.col, deck_id, EXCHANGE_DIR, state_dir, maths=cache, collect=True).wanted if cache else []
+        if not (wanted and self.host.start_render(wanted, cache, on_done=export_and_say)):
+            export_and_say()
 
 
 def deck_dialog(parent, names: list[str], index: int) -> int | None:
