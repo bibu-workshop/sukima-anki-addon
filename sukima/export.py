@@ -35,6 +35,8 @@ BATCH_FORMAT_VERSION_3 = 3
 BATCH_FORMAT_VERSION_4 = 4
 # Format 5: maths drawn by Anki's MathJax, as masks (card content spec; `maths.py`).
 BATCH_FORMAT_VERSION_5 = 5
+# Format 6: Anki's {{hint:}} as hint blocks (card content spec, tickets 04 and 05).
+BATCH_FORMAT_VERSION_6 = 6
 SOUNDS_DIR = "sounds"
 IMAGES_DIR = "images"
 # The prepared images of one batch together, at most (DEC-187 a); distinct images count once.
@@ -155,6 +157,8 @@ def _export(
     # Format 5, maths, likewise, and only with Anki's MathJax to draw it.
     format_5 = format_4 and maths_cache is not None and helper_reads_format(state_dir, 5)
     lookup = MathsLookup(maths_cache, collect=collect) if format_5 else None
+    # Format 6, hints, likewise; it needs format 4's conversion, not Anki's MathJax.
+    format_6 = format_4 and helper_reads_format(state_dir, 6)
     if collect and lookup is None:
         return ExportResult(OK)
     media_dir = col.media.dir()
@@ -172,6 +176,12 @@ def _export(
             return None, None
         out = []
         for b in blocks:
+            if "hint" in b:  # what a hint hides, prepared like the side around it (format 6)
+                inner, reason = with_images(b["hint"], new)
+                if reason:
+                    return None, reason
+                out.append({"hint": inner, "label": b["label"]})
+                continue
             if "sound" in b:
                 found = sound_file(Path(media_dir) / b["sound"])
                 if found.hash not in sounds and found.hash not in new:
@@ -216,7 +226,7 @@ def _export(
         new: dict[str, tuple] = {}
         if format_2:
             front, back, front_blocks, back_blocks, reason = card_sides_v2(
-                card, media_dir, sounds=format_3, code=format_4, maths=lookup)
+                card, media_dir, sounds=format_3, code=format_4, maths=lookup, hints=format_6)
             if not reason:
                 front_blocks, reason = with_images(front_blocks, new)
             if not reason:
@@ -294,8 +304,10 @@ def _export(
     uses_format_3 = bool(sounds)
     uses_format_4 = any(_uses_code(c) for c in cards)
     uses_format_5 = any(_uses_maths(c) for c in cards)
+    uses_format_6 = any(_uses_hints(c) for c in cards)
     version = (
-        BATCH_FORMAT_VERSION_5 if uses_format_5
+        BATCH_FORMAT_VERSION_6 if uses_format_6
+        else BATCH_FORMAT_VERSION_5 if uses_format_5
         else BATCH_FORMAT_VERSION_4 if uses_format_4
         else BATCH_FORMAT_VERSION_3 if uses_format_3
         else BATCH_FORMAT_VERSION_2 if uses_format_2
@@ -350,9 +362,24 @@ def _export(
     )
 
 
+def _all_blocks(card: dict) -> list[dict]:
+    """Every block of both sides, those inside hints included."""
+    found, stack = [], list((card.get("front_blocks") or []) + (card.get("back_blocks") or []))
+    while stack:
+        b = stack.pop(0)
+        found.append(b)
+        stack.extend(b.get("hint") or [])
+    return found
+
+
+def _uses_hints(card: dict) -> bool:
+    """A format 6 card: one of Anki's hints."""
+    return any("hint" in b for b in _all_blocks(card))
+
+
 def _uses_code(card: dict) -> bool:
     """A format 4 card: a code block, or a run in the style "code"."""
-    for b in (card.get("front_blocks") or []) + (card.get("back_blocks") or []):
+    for b in _all_blocks(card):
         if "code" in b:
             return True
         runs = b.get("text") or b.get("list_item") or []
@@ -364,7 +391,7 @@ def _uses_code(card: dict) -> bool:
 def _uses_maths(card: dict) -> bool:
     """A format 5 card: display maths, or a run of inline maths. A table drawn as a picture is
     an ordinary image block and needs no more than format 2."""
-    for b in (card.get("front_blocks") or []) + (card.get("back_blocks") or []):
+    for b in _all_blocks(card):
         if "maths" in b:
             return True
         if any("maths" in r for r in b.get("text") or b.get("list_item") or []):

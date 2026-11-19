@@ -200,6 +200,20 @@ Each mask is an entry of `images` like any image (`images/<hash>.png`, `transpar
 
 **Tables.** With format 5 passed on, a real table (not code) that holds only text and formatting is drawn as a picture in its own colours, at most 190 points wide, and goes as an ordinary image block (format 2): a PNG, `transparent` false. A table holding a picture, sound, maths, a script, a form field, another table or hidden content stays in Anki as `table`. A batch whose only new content is such a table is format 2.
 
+## Batch: `batch.json`, format version 6
+
+Format 5 with hints (card content spec, tickets 04 and 05; design guide 1.26, "Hints"). Written only when the helper's last cycle request listed 6 in `batch_formats`; otherwise a card with a hint stays in Anki as `script`, as before. A batch with no hint is written as format 5 or lower. A watch that doesn't read 6 never gets it: the helper turns it into format 5 (hint cards dropped and counted in `not_shown_by_day`, the images and sounds only they named removed), and lower as before.
+
+Only the markup Anki itself writes for `{{hint:Field}}` counts: a link with Anki's own `onclick` (showing the hidden part, optionally setting `window.location.hash`), followed at once by its hidden `<div id="hint…" class=hint style="display: none">`. Any other scripted button still keeps the card in Anki as `script`.
+
+A new block:
+
+| Block | Fields | Meaning |
+|---|---|---|
+| Hint | `hint`: list of blocks, `label`: text | One hint, in its place: the link's text (the field's name, as Anki shows it; "Hint" if empty), and what it hides, as blocks of their own. These are any blocks a side can hold except another hint: text, images, list items, sounds, code, maths |
+
+What a hint hides counts towards the side's length (`too_long`), and whatever would keep it off the watch keeps the card in Anki (a missing image, a script, and so on). The side's text alone (`front`, `back`) leaves the hint out, so the front never gives it away. An image or sound inside a hint is in the batch's tables like any other.
+
 ## Status: `status.json`, format version 1
 
 Written by the add-on. Read by the helper.
