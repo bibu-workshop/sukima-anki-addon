@@ -40,6 +40,15 @@ class FakeAnki:
         self.cycle = None
 
     def now_ms(self): return self.clock
+    # Maths (format 5): no MathJax unless a test sets a cache; a pass ends when told.
+    maths = None
+    rendering = None
+    def maths_cache(self, state_dir): return self.maths
+    def start_render(self, jobs, cache):
+        self.asked.append(("render", len(jobs)))
+        self.rendering = jobs
+        return True
+    def render_done(self): return self.rendering is None
     def anki_version(self): return self.version
     def sync_enabled(self): return self.enabled
     def sync_running(self): return self.running

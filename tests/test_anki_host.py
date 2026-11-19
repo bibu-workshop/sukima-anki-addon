@@ -249,3 +249,10 @@ def test_only_windows_besides_the_main_one_count(anki_ui):
     modal = QMessageBox("Dialog")
     assert anki_ui.open_windows(main, [main, modal], modal) == ["QMessageBox"]
     assert anki_ui.open_windows(main, [main], main) == []
+
+
+def test_the_render_passs_hidden_view_is_not_an_open_window(anki_ui):
+    """Its web view is shown off screen while it draws maths; it must not hold back a scheduled cycle."""
+    main, view = AnkiQt(), Window("Window")
+    assert anki_ui.open_windows(main, [main, view], None) == ["Window"]
+    assert anki_ui.open_windows(main, [main, view], None, ignore=[view]) == []

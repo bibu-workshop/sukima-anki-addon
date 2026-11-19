@@ -9,6 +9,20 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# One Qt application for every test, made before any other: the render pass's web view needs a
+# QApplication, Qt WebEngine must be imported before it exists, and the image tests' own
+# `QGuiApplication.instance()` then finds this one.
+import os  # noqa: E402
+
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
+try:
+    import PyQt6.QtWebEngineWidgets  # noqa: E402,F401
+    from PyQt6.QtWidgets import QApplication  # noqa: E402
+
+    QT_APP = QApplication.instance() or QApplication(["sukima-tests"])
+except ImportError:  # no Qt WebEngine: the render tests skip themselves
+    QT_APP = None
+
 from anki.collection import Collection  # noqa: E402
 from anki.scheduler.v3 import CardAnswer  # noqa: E402
 
