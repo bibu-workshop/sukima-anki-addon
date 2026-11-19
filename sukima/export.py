@@ -20,6 +20,7 @@ from .settings import deck_list
 from .status import update_status
 from .blocks import card_sides_v2
 from .images import helper_reads_format_2, prepare
+from .images import helper_reads_format
 from .sounds import helper_reads_format_3, sound_file
 from .text import IMAGE, card_sides
 
@@ -29,6 +30,8 @@ BATCH_FORMAT_VERSION = 1
 BATCH_FORMAT_VERSION_2 = 2
 # Format 3: sound cards (sound cards spec).
 BATCH_FORMAT_VERSION_3 = 3
+# Format 4: code blocks (card content spec).
+BATCH_FORMAT_VERSION_4 = 4
 SOUNDS_DIR = "sounds"
 IMAGES_DIR = "images"
 # The prepared images of one batch together, at most (DEC-187 a); distinct images count once.
@@ -127,6 +130,8 @@ def _export(
     format_2 = helper_reads_format_2(state_dir)
     # Format 3, sound cards, likewise; a helper that passes on 3 passes on 2.
     format_3 = format_2 and helper_reads_format_3(state_dir)
+    # Format 4, code, likewise; a helper that passes on 4 passes on 2 and 3.
+    format_4 = format_3 and helper_reads_format(state_dir, 4)
     media_dir = col.media.dir()
     image_cache = state_dir / "images"
     images: dict[str, dict] = {}  # hash -> the batch's image entry
@@ -167,7 +172,7 @@ def _export(
         front_blocks = back_blocks = None
         new: dict[str, tuple] = {}
         if format_2:
-            front, back, front_blocks, back_blocks, reason = card_sides_v2(card, media_dir, sounds=format_3)
+            front, back, front_blocks, back_blocks, reason = card_sides_v2(card, media_dir, sounds=format_3, code=format_4)
             if not reason:
                 front_blocks, reason = with_images(front_blocks, new)
             if not reason:
@@ -234,7 +239,13 @@ def _export(
     batch_id = str(uuid.uuid4())
     uses_format_2 = any("front_blocks" in c or "back_blocks" in c for c in cards)
     uses_format_3 = bool(sounds)
-    version = BATCH_FORMAT_VERSION_3 if uses_format_3 else BATCH_FORMAT_VERSION_2 if uses_format_2 else BATCH_FORMAT_VERSION
+    uses_format_4 = any(_uses_code(c) for c in cards)
+    version = (
+        BATCH_FORMAT_VERSION_4 if uses_format_4
+        else BATCH_FORMAT_VERSION_3 if uses_format_3
+        else BATCH_FORMAT_VERSION_2 if uses_format_2
+        else BATCH_FORMAT_VERSION
+    )
     # The media files first: the helper sends a batch only once every file it names is there.
     _write_images(exchange_dir, image_files if uses_format_2 else {})
     _write_files(exchange_dir / SOUNDS_DIR, sound_files)
@@ -282,6 +293,17 @@ def _export(
     return _finish(
         exchange_dir, state_dir, now_ms, deck["name"], result, [c["card_id"] for c in cards]
     )
+
+
+def _uses_code(card: dict) -> bool:
+    """A format 4 card: a code block, or a run in the style "code"."""
+    for b in (card.get("front_blocks") or []) + (card.get("back_blocks") or []):
+        if "code" in b:
+            return True
+        runs = b.get("text") or b.get("list_item") or []
+        if any("code" in r["styles"] for r in runs):
+            return True
+    return False
 
 
 def _write_images(exchange_dir: Path, files: dict[str, Path]) -> None:
